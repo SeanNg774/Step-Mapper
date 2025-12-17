@@ -1,6 +1,10 @@
 package com.example.stepcounter3.ui
 
+import android.os.Build
+import com.example.stepcounter3.TrailPoint
+import com.example.stepcounter3.TrailGenerator
 import android.widget.Toast
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -18,26 +22,92 @@ import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.CameraPosition
 import kotlinx.coroutines.delay
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.graphics.Color
+import com.google.maps.android.compose.Polyline
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import com.example.stepcounter3.buildGpxXml
+import com.example.stepcounter3.extendTrail
+import com.example.stepcounter3.saveGpxFile
+import com.example.stepcounter3.saveGpxToDownloads
+import com.example.stepcounter3.haversineMeters
+import java.time.Duration
+import java.time.LocalDateTime
+import java.lang.Math
+import kotlin.math.cos
+import kotlin.math.sin
 
 
 @Composable
-fun MapScreen() {
-    val mmucyberjaya = LatLng(2.9276384, 101.6420577)
+fun MapScreen(
+    trail: List<TrailPoint>,
+    onBack: () -> Unit
+) {
+    val cameraPositionState = rememberCameraPositionState()
 
-    GoogleMap(
-        modifier = Modifier.fillMaxSize(),
-        cameraPositionState = rememberCameraPositionState {
-            position = CameraPosition.fromLatLngZoom(mmucyberjaya, 14f)
+    // Move camera to first point when screen opens
+    LaunchedEffect(trail) {
+        if (trail.isNotEmpty()) {
+            val first = trail.first()
+            cameraPositionState.position = CameraPosition.fromLatLngZoom(
+                LatLng(first.lat, first.lon),
+                17f
+            )
         }
-    ) {
-        Marker(
-            state = MarkerState(position = mmucyberjaya),
-            title = "Multimedia University",
-            snippet = "Marker in Cyberjaya"
-        )
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+
+        GoogleMap(
+            modifier = Modifier.fillMaxSize(),
+            cameraPositionState = cameraPositionState
+        ) {
+
+            // Draw polyline (the walking trail)
+            if (trail.size > 1) {
+                Polyline(
+                    points = trail.map { LatLng(it.lat, it.lon) },
+                    color = Color.Blue,
+                    width = 10f
+                )
+            }
+
+            // Mark starting point
+            trail.firstOrNull()?.let { start ->
+                Marker(
+                    state = MarkerState(LatLng(start.lat, start.lon)),
+                    title = "Start"
+                )
+            }
+
+            // Mark ending point
+            trail.lastOrNull()?.let { end ->
+                Marker(
+                    state = MarkerState(LatLng(end.lat, end.lon)),
+                    title = "End"
+                )
+            }
+        }
+
+        // Back Button
+        IconButton(
+            onClick = onBack,
+            modifier = Modifier
+                .padding(16.dp)
+                .align(Alignment.TopStart)
+        ) {
+            Icon(
+                imageVector = Icons.Default.ArrowBack,
+                contentDescription = "Back",
+                tint = Color.Black
+            )
+        }
     }
 }
 
+@RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun StepCounterScreen(
     onOpenMap: () -> Unit,
@@ -48,7 +118,9 @@ fun StepCounterScreen(
     onEndSession: (steps: Int, distanceKm: Double, speedKmh: Double) -> Unit,
     isSessionRunningFlow: MutableStateFlow<Boolean>,
     sessionStartTimeFlow: MutableStateFlow<Long>,
-    sessionStartStepsFlow: MutableStateFlow<Int>
+    sessionStartStepsFlow: MutableStateFlow<Int>,
+    onTrailGenerated: (List<TrailPoint>) -> Unit
+
 ) {
     val totalSteps by totalStepsFlow.collectAsState()
     val currentSteps = (totalSteps - previousTotalSteps.toInt()).coerceAtLeast(0)
@@ -57,10 +129,26 @@ fun StepCounterScreen(
     val sessionStartTime by sessionStartTimeFlow.collectAsState()
     val sessionStartSteps by sessionStartStepsFlow.collectAsState()
 
+
+    var generatedTrail by remember { mutableStateOf<List<TrailPoint>>(emptyList()) }
     var elapsedTime by remember { mutableStateOf(0L) }
     var lastSessionSteps by remember { mutableStateOf(0) }
     var lastSessionDistance by remember { mutableStateOf(0.0) }
     var lastSessionSpeed by remember { mutableStateOf(0.0) }
+    var lastSessionTrail by remember { mutableStateOf<List<TrailPoint>>(emptyList()) }
+    var liveTrail by remember { mutableStateOf<List<TrailPoint>>(emptyList()) }
+    var currentLat by remember { mutableStateOf(2.9278) }
+    var currentLon by remember { mutableStateOf(101.6419) }
+    var lastUpdatedSteps by remember { mutableStateOf(0) }
+    var lastStepCheckpoint by remember { mutableStateOf(0) }
+    var lastCheckpointTime by remember { mutableStateOf(LocalDateTime.now()) }
+    var walkingDirection by remember {
+        mutableStateOf(Math.random() * 360)
+    }
+    val mapTrail =
+        if (isSessionRunning) liveTrail else lastSessionTrail
+
+
 
     // Tick every second while session is running
     LaunchedEffect(isSessionRunning) {
@@ -69,18 +157,82 @@ fun StepCounterScreen(
             delay(1000)
         }
     }
+
+    LaunchedEffect(isSessionRunning) {
+        if (isSessionRunning) {
+            lastUpdatedSteps = 0
+            liveTrail = emptyList()
+        }
+    }
+
+    LaunchedEffect(totalSteps, isSessionRunning) {
+        if (!isSessionRunning) return@LaunchedEffect
+
+        val stepsSinceCheckpoint = totalSteps - lastStepCheckpoint
+        if (stepsSinceCheckpoint < 10) return@LaunchedEffect
+
+        val now = LocalDateTime.now()
+        val durationSeconds =
+            Duration.between(lastCheckpointTime, now).seconds.coerceAtLeast(1)
+
+        val distanceMeters = stepsSinceCheckpoint * 0.7
+
+        // Small direction drift
+        walkingDirection += (-5..5).random()
+
+        // Rare larger turn
+        if ((0..100).random() < 5) {
+            walkingDirection += (-30..30).random()
+        }
+
+        val rad = Math.toRadians(walkingDirection)
+
+        currentLat += (distanceMeters / 111_320.0) * cos(rad)
+        currentLon += (distanceMeters / 111_320.0) * sin(rad)
+
+        liveTrail = liveTrail + TrailPoint(
+            lat = currentLat,
+            lon = currentLon,
+            time = now
+        )
+
+        lastStepCheckpoint = totalSteps
+        lastCheckpointTime = now
+    }
+
+
+
     val sessionEndTime = System.currentTimeMillis()
     val totalDurationMillis = sessionEndTime - sessionStartTimeFlow.collectAsState().value
     val totalDurationSeconds = totalDurationMillis / 1000
 
     // Calculate distance and speed
-    val stepLengthMeters = 0.75 // average step length
+    val stepLengthMeters = 0.7 // average step length
     val sessionSteps = if (isSessionRunning) totalSteps - sessionStartSteps else 0
     val distanceMeters = sessionSteps * stepLengthMeters
     val distanceKm = distanceMeters / 1000.0
     val speedKmh = if (elapsedTime > 0) distanceMeters / elapsedTime * 3.6 else 0.0
     val averageSpeedMps = if (totalDurationSeconds > 0) distanceMeters / totalDurationSeconds else 0.0
     val averageSpeedKmh = averageSpeedMps * 3.6
+    val instantSpeedKmh = remember(liveTrail) {
+        if (liveTrail.size < 2) 0.0
+        else {
+            val p1 = liveTrail[liveTrail.size - 2]
+            val p2 = liveTrail.last()
+
+            val dist = haversineMeters(p1.lat, p1.lon, p2.lat, p2.lon)
+            val time = Duration.between(p1.time, p2.time).seconds
+
+            if (time > 0) (dist / time) * 3.6 else 0.0
+        }
+    }
+    val exportTrail = when {
+        isSessionRunning && liveTrail.isNotEmpty() -> liveTrail
+        lastSessionTrail.isNotEmpty() -> lastSessionTrail
+        else -> generatedTrail
+    }
+
+
 
     Surface {
         Column(
@@ -90,6 +242,24 @@ fun StepCounterScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+
+            if (mapTrail.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(250.dp)
+                ) {
+                    MapScreen(
+                        trail = mapTrail,
+                        onBack = {}
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
 
             // ✅ Session info while running
             if (isSessionRunning) {
@@ -151,18 +321,40 @@ fun StepCounterScreen(
                         // Save last session info
                         lastSessionSteps = sessionSteps
                         lastSessionDistance = distanceKm
-                        lastSessionSpeed = speedKmh
+                        lastSessionSpeed = instantSpeedKmh
+                        lastSessionTrail = liveTrail.toList()
 
-                        onEndSession(sessionSteps, distanceKm, speedKmh)
+                        onEndSession(sessionSteps, distanceKm, instantSpeedKmh )
                     },
                     enabled = isSessionRunning
                 ) { Text("End") }
             }
+            Spacer(modifier = Modifier.height(16.dp))
+
 
             Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = onOpenMap) {
-                Text("Map")
+
+            Button(
+                onClick = {
+                    if (exportTrail.isNotEmpty()) {
+                        val gpx = buildGpxXml(
+                            points = exportTrail,
+                            name = "Indoor Walk"
+                        )
+
+                        saveGpxToDownloads(
+                            context = context,
+                            fileName = "indoor_walk_${System.currentTimeMillis()}.gpx",
+                            gpxData = gpx
+                        )
+                    }
+                }
+            ) {
+                Text("Download GPX")
             }
+
+
         }
     }
 }
+

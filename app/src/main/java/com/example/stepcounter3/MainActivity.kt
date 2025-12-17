@@ -1,18 +1,19 @@
 package com.example.stepcounter3
 
 import android.Manifest
-import android.content.Context
 import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Build
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import com.example.stepcounter3.ui.StepCounterScreen
@@ -69,10 +70,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-
+    private val trailState = mutableStateOf<List<TrailPoint>>(emptyList())
 
     // --------------------------------------------------
 
+    @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -104,35 +106,52 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MaterialTheme {
+
                 val navController = rememberNavController()
 
                 NavHost(navController, startDestination = "stepCounter") {
+
                     composable("stepCounter") {
                         StepCounterScreen(
                             totalStepsFlow = totalStepsFlow,
                             previousTotalSteps = previousTotalSteps,
                             onReset = {
                                 previousTotalSteps = totalStepsFlow.value.toFloat()
-                                saveBaseline(previousTotalSteps) },
+                                saveBaseline(previousTotalSteps)
+                            },
                             onStartSession = { startSession() },
                             onEndSession = { steps, distanceKm, speedKmh ->
+
+                                isSessionRunningFlow.value = false
                                 endSession(steps, distanceKm, speedKmh)
                             },
                             isSessionRunningFlow = isSessionRunningFlow,
                             sessionStartTimeFlow = sessionStartTimeFlow,
                             sessionStartStepsFlow = sessionStartStepsFlow,
-                            onOpenMap = { navController.navigate("map") }
+
+                            onOpenMap = { navController.navigate("map") },
+
+                            // 🔥 ADD THIS
+                            onTrailGenerated = { trail ->
+                                trailState.value = trail // save trail
+                            }
                         )
                     }
+
                     composable("map") {
-                        MapScreen()
+                        // 🔥 Pass the trail to MapScreen
+                        MapScreen(
+                            trail = trailState.value,
+                            onBack = { navController.popBackStack() }
+                        )
                     }
                 }
             }
         }
     }
 
-    override fun onResume() {
+
+        override fun onResume() {
         super.onResume()
         stepSensor?.let {
             sensorManager.registerListener(
