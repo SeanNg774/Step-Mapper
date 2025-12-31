@@ -22,6 +22,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.stepcounter3.ui.MapScreen
+import java.time.ZoneOffset
+import com.example.stepcounter3.TrailPoint
 
 class MainActivity : ComponentActivity() {
 
@@ -71,7 +73,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private val trailState = mutableStateOf<List<TrailPoint>>(emptyList())
-
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun saveTrailToPrefs(trail: List<TrailPoint>, steps: Int) {
+        val shared = getSharedPreferences("myPrefs", MODE_PRIVATE)
+        shared.edit {
+            putString("savedTrail", trailToString(trail))
+            putInt("savedTrailSteps", steps) // <--- Save the step count!
+        }
+    }
     // --------------------------------------------------
 
     @RequiresApi(Build.VERSION_CODES.O)
@@ -81,6 +90,9 @@ class MainActivity : ComponentActivity() {
         // Load session state if app was killed
         val shared = getSharedPreferences("myPrefs", MODE_PRIVATE)
         val wasRunning = shared.getBoolean("isSessionRunning", false)
+        val savedTrailString = shared.getString("savedTrail", "") ?: ""
+        val initialTrail = stringToTrail(savedTrailString)
+        val savedTrailSteps = shared.getInt("savedTrailSteps", 0)
         isSessionRunningFlow.value = wasRunning
 
         if (wasRunning) {
@@ -113,6 +125,12 @@ class MainActivity : ComponentActivity() {
 
                     composable("stepCounter") {
                         StepCounterScreen(
+                            initialTrail = initialTrail,
+                            initialSteps = savedTrailSteps,
+                            onTrailUpdated = { updatedTrail, currentSteps->
+                                trailState.value = updatedTrail
+                                saveTrailToPrefs(updatedTrail, currentSteps)
+                            },
                             totalStepsFlow = totalStepsFlow,
                             previousTotalSteps = previousTotalSteps,
                             onReset = {
@@ -184,5 +202,26 @@ class MainActivity : ComponentActivity() {
     private fun loadBaseline(): Float {
         return getSharedPreferences("prefs", MODE_PRIVATE)
             .getFloat("baseline", 0f)
+    }
+    @RequiresApi(Build.VERSION_CODES.O)
+    fun trailToString(trail: List<TrailPoint>): String {
+        return trail.joinToString(";") { point ->
+            "${point.lat},${point.lon},${point.time.toEpochSecond(ZoneOffset.UTC)}"
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    fun stringToTrail(data: String): List<TrailPoint> {
+        if (data.isBlank()) return emptyList()
+        return data.split(";").mapNotNull { entry ->
+            val parts = entry.split(",")
+            if (parts.size == 3) {
+                TrailPoint(
+                    lat = parts[0].toDouble(),
+                    lon = parts[1].toDouble(),
+                    time = java.time.LocalDateTime.ofEpochSecond(parts[2].toLong(), 0, ZoneOffset.UTC)
+                )
+            } else null
+        }
     }
 }

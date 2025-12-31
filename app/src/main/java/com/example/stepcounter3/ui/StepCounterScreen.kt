@@ -110,6 +110,9 @@ fun MapScreen(
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun StepCounterScreen(
+    initialTrail: List<TrailPoint>,
+    onTrailUpdated: (List<TrailPoint>, Int) -> Unit,
+    initialSteps: Int,
     onOpenMap: () -> Unit,
     totalStepsFlow: MutableStateFlow<Int>,
     previousTotalSteps: Float,
@@ -136,11 +139,15 @@ fun StepCounterScreen(
     var lastSessionDistance by remember { mutableStateOf(0.0) }
     var lastSessionSpeed by remember { mutableStateOf(0.0) }
     var lastSessionTrail by remember { mutableStateOf<List<TrailPoint>>(emptyList()) }
-    var liveTrail by remember { mutableStateOf<List<TrailPoint>>(emptyList()) }
-    var currentLat by remember { mutableStateOf(2.9278) }
-    var currentLon by remember { mutableStateOf(101.6419) }
+    var liveTrail by remember { mutableStateOf(initialTrail) }
+    var currentLat by remember {
+        mutableStateOf(initialTrail.lastOrNull()?.lat ?: 2.9278)
+    }
+    var currentLon by remember {
+        mutableStateOf(initialTrail.lastOrNull()?.lon ?: 101.6419)
+    }
     var lastUpdatedSteps by remember { mutableStateOf(0) }
-    var lastStepCheckpoint by remember { mutableStateOf(0) }
+    var lastStepCheckpoint by remember { mutableStateOf(initialSteps) }
     var lastCheckpointTime by remember { mutableStateOf(LocalDateTime.now()) }
     var walkingDirection by remember {
         mutableStateOf(Math.random() * 360)
@@ -157,48 +164,78 @@ fun StepCounterScreen(
             delay(1000)
         }
     }
-
+    /*
     LaunchedEffect(isSessionRunning) {
         if (isSessionRunning) {
             lastUpdatedSteps = 0
             liveTrail = emptyList()
         }
     }
+    */
+    LaunchedEffect(isSessionRunning, totalSteps) {
+        if (isSessionRunning && lastStepCheckpoint == 0 && totalSteps > 0) {
+            lastStepCheckpoint = totalSteps
+        }
+    }
 
     LaunchedEffect(totalSteps, isSessionRunning) {
         if (!isSessionRunning) return@LaunchedEffect
 
-        val stepsSinceCheckpoint = totalSteps - lastStepCheckpoint
-        if (stepsSinceCheckpoint < 10) return@LaunchedEffect
+        // Safety check
+        if (lastStepCheckpoint == 0) return@LaunchedEffect
 
-        val now = LocalDateTime.now()
-        val durationSeconds =
-            Duration.between(lastCheckpointTime, now).seconds.coerceAtLeast(1)
-
-        val distanceMeters = stepsSinceCheckpoint * 0.7
-
-        // Small direction drift
-        walkingDirection += (-5..5).random()
-
-        // Rare larger turn
-        if ((0..100).random() < 5) {
-            walkingDirection += (-30..30).random()
+        // Handle sensor reset (device reboot)
+        if (totalSteps < lastStepCheckpoint) {
+            lastStepCheckpoint = totalSteps
+            return@LaunchedEffect
         }
 
-        val rad = Math.toRadians(walkingDirection)
+        val stepsSinceCheckpoint = totalSteps - lastStepCheckpoint
 
-        currentLat += (distanceMeters / 111_320.0) * cos(rad)
-        currentLon += (distanceMeters / 111_320.0) * sin(rad)
+        // Threshold to update
+        if (stepsSinceCheckpoint >= 10) {
 
-        liveTrail = liveTrail + TrailPoint(
-            lat = currentLat,
-            lon = currentLon,
-            time = now
-        )
+            // 1. CATCH UP MODE (App was killed/paused)
+            if (stepsSinceCheckpoint > 50) {
+                val missedPath = extendTrail(
+                    startLat = currentLat,
+                    startLon = currentLon,
+                    startTime = lastCheckpointTime,
+                    steps = stepsSinceCheckpoint
+                )
+                liveTrail = liveTrail + missedPath
 
-        lastStepCheckpoint = totalSteps
-        lastCheckpointTime = now
+                // Update location to the end of the new path
+                if (missedPath.isNotEmpty()) {
+                    val last = missedPath.last()
+                    currentLat = last.lat
+                    currentLon = last.lon
+                    lastCheckpointTime = last.time
+                }
+            }
+            // 2. NORMAL WALKING MODE (Live updates)
+            else {
+                val now = LocalDateTime.now()
+                val distanceMeters = stepsSinceCheckpoint * 0.7
+
+                // Drift direction slightly
+                walkingDirection += (-5..5).random()
+                val rad = Math.toRadians(walkingDirection)
+
+                currentLat += (distanceMeters / 111_320.0) * cos(rad)
+                currentLon += (distanceMeters / 111_320.0) * sin(rad)
+
+                val newPoint = TrailPoint(currentLat, currentLon, now)
+                liveTrail = liveTrail + newPoint
+                lastCheckpointTime = now
+            }
+
+            // 3. SAVE STATE
+            lastStepCheckpoint = totalSteps
+            onTrailUpdated(liveTrail, totalSteps)
+        }
     }
+
 
 
 
@@ -279,7 +316,7 @@ fun StepCounterScreen(
                 Text("Average Speed: %.2f km/h".format(lastSessionDistance/(elapsedTime/3600.0)))
                 Spacer(modifier = Modifier.height(16.dp))
             }
-
+            /*
             // Current total steps
             Text(
                 text = currentSteps.toString(),
@@ -307,12 +344,17 @@ fun StepCounterScreen(
                     .padding(top = 24.dp)
                     .fillMaxWidth()
             )
-
+            */
             Spacer(modifier = Modifier.height(16.dp))
 
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Button(
-                    onClick = onStartSession,
+                    onClick = {
+                        liveTrail = emptyList()
+                        lastUpdatedSteps = 0
+
+                        onStartSession()
+                    },
                     enabled = !isSessionRunning
                 ) { Text("Start") }
 
