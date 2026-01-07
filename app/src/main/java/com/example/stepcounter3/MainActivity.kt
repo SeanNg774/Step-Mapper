@@ -95,6 +95,9 @@ class MainActivity : ComponentActivity() {
         val savedTrailSteps = shared.getInt("savedTrailSteps", 0)
         isSessionRunningFlow.value = wasRunning
 
+        val defaultLat = shared.getFloat("defaultLat", 2.9278f).toDouble()
+        val defaultLon = shared.getFloat("defaultLon", 101.6419f).toDouble()
+
         if (wasRunning) {
             sessionStartTimeFlow.value = shared.getLong("sessionStartTime", 0)
             sessionStartStepsFlow.value = shared.getInt("sessionStartSteps", 0)
@@ -127,6 +130,14 @@ class MainActivity : ComponentActivity() {
                         StepCounterScreen(
                             initialTrail = initialTrail,
                             initialSteps = savedTrailSteps,
+                            defaultLat = defaultLat,
+                            defaultLon = defaultLon,
+                            onSaveStartLocation = { lat, lon ->
+                                shared.edit {
+                                    putFloat("defaultLat", lat.toFloat())
+                                    putFloat("defaultLon", lon.toFloat())
+                                }
+                            },
                             onTrailUpdated = { updatedTrail, currentSteps->
                                 trailState.value = updatedTrail
                                 saveTrailToPrefs(updatedTrail, currentSteps)

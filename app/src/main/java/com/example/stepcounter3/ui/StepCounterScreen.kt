@@ -38,8 +38,135 @@ import java.time.LocalDateTime
 import java.lang.Math
 import kotlin.math.cos
 import kotlin.math.sin
+import com.example.stepcounter3.shareGpxFile
+import com.google.maps.android.compose.rememberMarkerState
+import com.google.maps.android.compose.rememberUpdatedMarkerState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
+import com.google.android.gms.maps.CameraUpdateFactory
+
+@Composable
+fun LocationPickerScreen(
+    startLat: Double,
+    startLon: Double,
+    onLocationSelected: (Double, Double) -> Unit,
+    onCancel: () -> Unit
 
 
+) {
+    var selectedPos by remember { mutableStateOf(LatLng(startLat, startLon)) }
+    var latText by remember { mutableStateOf(startLat.toString()) }
+    var lonText by remember { mutableStateOf(startLon.toString()) }
+    val cameraPositionState = rememberCameraPositionState {
+        position = CameraPosition.fromLatLngZoom(LatLng(startLat, startLon), 15f)
+    }
+    val markerState = rememberUpdatedMarkerState(position = selectedPos)
+
+    LaunchedEffect(selectedPos) {
+        markerState.position = selectedPos
+    }
+    fun updateFromMap(pos: LatLng) {
+        selectedPos = pos
+        // Update text fields to match the tap
+        latText = "%.6f".format(pos.latitude)
+        lonText = "%.6f".format(pos.longitude)
+    }
+    fun updateFromText() {
+        val lat = latText.toDoubleOrNull()
+        val lon = lonText.toDoubleOrNull()
+        if (lat != null && lon != null) {
+            val newPos = LatLng(lat, lon)
+            selectedPos = newPos
+            // Move camera to show the new typed location
+            cameraPositionState.move(CameraUpdateFactory.newLatLng(newPos))
+        }
+    }
+    Box(modifier = Modifier.fillMaxSize()) {
+        GoogleMap(
+            modifier = Modifier.fillMaxSize(),
+            cameraPositionState = cameraPositionState,
+            onMapClick = { latLng -> updateFromMap(latLng) }
+        ) {
+            Marker(
+                state = markerState,
+                title = "Selected Location"
+            )
+        }
+
+        // --- TOP INPUT PANEL ---
+        Surface(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .padding(16.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+            shape = MaterialTheme.shapes.medium,
+            shadowElevation = 4.dp
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Enter Coordinates or Tap Map", style = MaterialTheme.typography.titleSmall)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Latitude Input
+                    OutlinedTextField(
+                        value = latText,
+                        onValueChange = { latText = it },
+                        label = { Text("Lat") },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Decimal,
+                            imeAction = ImeAction.Next
+                        )
+                    )
+                    // Longitude Input
+                    OutlinedTextField(
+                        value = lonText,
+                        onValueChange = { lonText = it },
+                        label = { Text("Lon") },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Decimal,
+                            imeAction = ImeAction.Done
+                        )
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // "Move to Coordinates" Button
+                Button(
+                    onClick = { updateFromText() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Move Marker to Coordinates")
+                }
+            }
+        }
+
+        // --- BOTTOM ACTION BUTTONS ---
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(32.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Cancel Button
+            FilledTonalButton(onClick = onCancel) {
+                Text("Cancel")
+            }
+
+            // Confirm Button (This actually saves it)
+            Button(
+                onClick = {
+                    onLocationSelected(selectedPos.latitude, selectedPos.longitude)
+                }
+            ) {
+                Text("Confirm Starting Point")
+            }
+        }
+    }
+}
 @Composable
 fun MapScreen(
     trail: List<TrailPoint>,
@@ -50,10 +177,19 @@ fun MapScreen(
     // Move camera to first point when screen opens
     LaunchedEffect(trail) {
         if (trail.isNotEmpty()) {
-            val first = trail.first()
+            val latestPoint = trail.last()
+
+            // 1. Get the current zoom level (so we don't reset it)
+            // If the map just started (zoom is near 0), default to 17f.
+            // Otherwise, respect the user's current zoom.
+            val currentZoom = cameraPositionState.position.zoom
+            val targetZoom = if (currentZoom < 10f) 17f else currentZoom
+
+            // 2. Move the camera instantly to the new location with the calculated zoom
+            // This is "crash-proof" because it uses the State object directly
             cameraPositionState.position = CameraPosition.fromLatLngZoom(
-                LatLng(first.lat, first.lon),
-                17f
+                LatLng(latestPoint.lat, latestPoint.lon),
+                targetZoom
             )
         }
     }
@@ -110,6 +246,9 @@ fun MapScreen(
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun StepCounterScreen(
+    defaultLat: Double,
+    defaultLon: Double,
+    onSaveStartLocation: (Double, Double) -> Unit,
     initialTrail: List<TrailPoint>,
     onTrailUpdated: (List<TrailPoint>, Int) -> Unit,
     initialSteps: Int,
@@ -132,7 +271,9 @@ fun StepCounterScreen(
     val sessionStartTime by sessionStartTimeFlow.collectAsState()
     val sessionStartSteps by sessionStartStepsFlow.collectAsState()
 
-
+    var homeLat by remember { mutableStateOf(defaultLat) }
+    var homeLon by remember { mutableStateOf(defaultLon) }
+    var isPickingLocation by remember { mutableStateOf(false) }
     var generatedTrail by remember { mutableStateOf<List<TrailPoint>>(emptyList()) }
     var elapsedTime by remember { mutableStateOf(0L) }
     var lastSessionSteps by remember { mutableStateOf(0) }
@@ -141,10 +282,10 @@ fun StepCounterScreen(
     var lastSessionTrail by remember { mutableStateOf<List<TrailPoint>>(emptyList()) }
     var liveTrail by remember { mutableStateOf(initialTrail) }
     var currentLat by remember {
-        mutableStateOf(initialTrail.lastOrNull()?.lat ?: 2.9278)
+        mutableStateOf(initialTrail.lastOrNull()?.lat ?: homeLat)
     }
     var currentLon by remember {
-        mutableStateOf(initialTrail.lastOrNull()?.lon ?: 101.6419)
+        mutableStateOf(initialTrail.lastOrNull()?.lon ?: homeLon)
     }
     var lastUpdatedSteps by remember { mutableStateOf(0) }
     var lastStepCheckpoint by remember { mutableStateOf(initialSteps) }
@@ -152,9 +293,36 @@ fun StepCounterScreen(
     var walkingDirection by remember {
         mutableStateOf(Math.random() * 360)
     }
+    var resumePoint by remember { mutableStateOf(initialTrail.lastOrNull()) }
+
     val mapTrail =
         if (isSessionRunning) liveTrail else lastSessionTrail
 
+    if (isPickingLocation) {
+        LocationPickerScreen(
+            startLat = currentLat,
+            startLon = currentLon,
+            onLocationSelected = { lat, lon ->
+                // Update local state
+                homeLat = lat
+                homeLon = lon
+
+                currentLat = lat
+                currentLon = lon
+
+                // Save to persistence
+                onSaveStartLocation(lat, lon)
+
+                // Close picker
+                isPickingLocation = false
+
+                // Optional: Clear any old trail if you want a fresh start
+                // liveTrail = emptyList()
+            },
+            onCancel = { isPickingLocation = false }
+        )
+        return // Stop rendering the rest of the UI behind the map
+    }
 
 
     // Tick every second while session is running
@@ -219,7 +387,7 @@ fun StepCounterScreen(
                 val distanceMeters = stepsSinceCheckpoint * 0.7
 
                 // Drift direction slightly
-                walkingDirection += (-5..5).random()
+                walkingDirection += (-10..10).random()
                 val rad = Math.toRadians(walkingDirection)
 
                 currentLat += (distanceMeters / 111_320.0) * cos(rad)
@@ -286,7 +454,8 @@ fun StepCounterScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(250.dp)
+                        //.height(250.dp)
+                        .weight(1f)
                 ) {
                     MapScreen(
                         trail = mapTrail,
@@ -316,35 +485,7 @@ fun StepCounterScreen(
                 Text("Average Speed: %.2f km/h".format(lastSessionDistance/(elapsedTime/3600.0)))
                 Spacer(modifier = Modifier.height(16.dp))
             }
-            /*
-            // Current total steps
-            Text(
-                text = currentSteps.toString(),
-                style = MaterialTheme.typography.headlineLarge,
-                modifier = Modifier.combinedClickable(
-                    onClick = {
-                        Toast.makeText(
-                            context,
-                            "Long press to reset",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    },
-                    onLongClick = onReset
-                )
-            )
-            Text(
-                text = "/10000",
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(top = 8.dp)
-            )
 
-            LinearProgressIndicator(
-                progress = (currentSteps / 10000f).coerceIn(0f, 1f),
-                modifier = Modifier
-                    .padding(top = 24.dp)
-                    .fillMaxWidth()
-            )
-            */
             Spacer(modifier = Modifier.height(16.dp))
 
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -353,6 +494,9 @@ fun StepCounterScreen(
                         liveTrail = emptyList()
                         lastUpdatedSteps = 0
 
+                        currentLat = homeLat
+                        currentLon = homeLon
+
                         onStartSession()
                     },
                     enabled = !isSessionRunning
@@ -360,6 +504,9 @@ fun StepCounterScreen(
 
                 Button(
                     onClick = {
+                        if (liveTrail.isNotEmpty()) {
+                            resumePoint = liveTrail.last()
+                        }
                         // Save last session info
                         lastSessionSteps = sessionSteps
                         lastSessionDistance = distanceKm
@@ -371,10 +518,43 @@ fun StepCounterScreen(
                     enabled = isSessionRunning
                 ) { Text("End") }
             }
-            Spacer(modifier = Modifier.height(16.dp))
 
 
             Spacer(modifier = Modifier.height(16.dp))
+
+            if (!isSessionRunning && resumePoint != null) {
+                Button(
+                    onClick = {
+                        liveTrail = emptyList()
+                        lastUpdatedSteps = 0
+
+                        // SET START TO PREVIOUS END POINT
+                        resumePoint?.let { point ->
+                            currentLat = point.lat
+                            currentLon = point.lon
+
+                            // Optional: Update map to show where we are resuming
+                            homeLat = point.lat // Update home so it doesn't snap back later? (Optional)
+                            homeLon = point.lon
+                        }
+
+                        onStartSession()
+                    }
+                ) {
+                    Text(" Resume from Last Point")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            if (!isSessionRunning) {
+                Button(
+                    onClick = { isPickingLocation = true }
+                ) {
+                    Text(" Set Start Location")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+
 
             Button(
                 onClick = {
@@ -384,15 +564,19 @@ fun StepCounterScreen(
                             name = "Indoor Walk"
                         )
 
-                        saveGpxToDownloads(
+                        val savedUri = saveGpxToDownloads(
                             context = context,
                             fileName = "indoor_walk_${System.currentTimeMillis()}.gpx",
                             gpxData = gpx
                         )
+                        if (savedUri != null) {
+                            shareGpxFile(context, savedUri)
+                        }
+
                     }
                 }
             ) {
-                Text("Download GPX")
+                Text("Download & Share GPX")
             }
 
 

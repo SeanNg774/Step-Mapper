@@ -15,6 +15,7 @@ import android.widget.Toast
 import java.io.OutputStream
 import java.time.Duration
 import kotlin.math.*
+import android.content.Intent
 
 
 fun haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
@@ -31,7 +32,7 @@ fun haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Dou
 fun buildGpxXml(points: List<TrailPoint>, name: String = "TrailRun"): String {
     if (points.isEmpty()) return ""
 
-    val formatter = DateTimeFormatter.ISO_DATE_TIME
+    val formatter = DateTimeFormatter.ISO_INSTANT
 
     val startTime = points.first().time
     val endTime = points.last().time
@@ -45,9 +46,10 @@ fun buildGpxXml(points: List<TrailPoint>, name: String = "TrailRun"): String {
         val dist = haversineMeters(a.lat, a.lon, b.lat, b.lon)
         val duration = Duration.between(a.time, b.time).seconds
         val speedKmh = if (duration > 0) dist / duration * 3.6 else 0.0
+        val utcTime = b.time.atZone(java.time.ZoneId.systemDefault()).toInstant()
 
         """<trkpt lat="${b.lat}" lon="${b.lon}">
-        <time>${formatter.format(b.time)}</time>
+        <time>${formatter.format(utcTime)}</time>
         <extensions>
             <speed>${"%.2f".format(speedKmh)}</speed>
         </extensions>
@@ -82,7 +84,7 @@ fun saveGpxFile(context: Context, fileName: String, gpxData: String): Uri {
 }
 
 @RequiresApi(Build.VERSION_CODES.Q)
-fun saveGpxToDownloads(context: Context, fileName: String, gpxData: String) {
+fun saveGpxToDownloads(context: Context, fileName: String, gpxData: String): Uri? {
     val resolver = context.contentResolver
     val contentValues = ContentValues().apply {
         put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
@@ -103,4 +105,15 @@ fun saveGpxToDownloads(context: Context, fileName: String, gpxData: String) {
     } ?: run {
         Toast.makeText(context, "Failed to save GPX", Toast.LENGTH_SHORT).show()
     }
+
+    return uri
+}
+
+fun shareGpxFile(context: android.content.Context, uri: android.net.Uri) {
+    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/xml" // "application/gpx+xml" is correct but "text/xml" is more compatible
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(shareIntent, "Share Route"))
 }

@@ -68,7 +68,7 @@ fun extendTrail(
     startLon: Double,
     startTime: LocalDateTime,
     steps: Int,
-    stepLengthMeters: Double = 0.75,
+    stepLengthMeters: Double = 0.7,
 ): List<TrailPoint> {
 
     if (steps <= 0) return emptyList()
@@ -93,7 +93,7 @@ fun extendTrail(
 
         points.add(TrailPoint(lat, lon, time))
 
-        direction += (-20..20).random()
+        direction += (-10..10).random()
     }
 
     return points
