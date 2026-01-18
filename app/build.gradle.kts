@@ -15,7 +15,7 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -52,6 +52,7 @@ dependencies {
     implementation("com.google.maps.android:maps-compose:6.12.2")
     implementation("androidx.navigation:navigation-compose:2.9.6")
     implementation("androidx.compose.material:material-icons-extended:1.7.8")
+    implementation("androidx.exifinterface:exifinterface:1.4.2")
 
     implementation(platform("androidx.compose:compose-bom:2025.11.01"))
 

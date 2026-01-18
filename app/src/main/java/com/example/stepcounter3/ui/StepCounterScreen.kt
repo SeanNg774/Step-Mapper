@@ -45,6 +45,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.ImeAction
 import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.maps.android.compose.MapProperties
+import com.google.maps.android.compose.MapType
 
 @Composable
 fun LocationPickerScreen(
@@ -246,6 +248,7 @@ fun MapScreen(
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun StepCounterScreen(
+    onClearSavedData: () -> Unit,
     defaultLat: Double,
     defaultLon: Double,
     onSaveStartLocation: (Double, Double) -> Unit,
@@ -294,7 +297,7 @@ fun StepCounterScreen(
         mutableStateOf(Math.random() * 360)
     }
     var resumePoint by remember { mutableStateOf(initialTrail.lastOrNull()) }
-
+    var currentMapType by remember { mutableStateOf(MapType.NORMAL) }
     val mapTrail =
         if (isSessionRunning) liveTrail else lastSessionTrail
 
@@ -497,6 +500,12 @@ fun StepCounterScreen(
                         currentLat = homeLat
                         currentLon = homeLon
 
+
+                        lastStepCheckpoint = totalSteps
+                        lastCheckpointTime = LocalDateTime.now()
+
+                        onClearSavedData()
+
                         onStartSession()
                     },
                     enabled = !isSessionRunning
@@ -554,31 +563,34 @@ fun StepCounterScreen(
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
+            if(!isSessionRunning) {
+                Button(
+                    onClick = {
+                        if (exportTrail.isNotEmpty()) {
+                            val gpx = buildGpxXml(
+                                points = exportTrail,
+                                name = "Indoor Walk"
+                            )
 
+                            val savedUri = saveGpxToDownloads(
+                                context = context,
+                                fileName = "indoor_walk_${System.currentTimeMillis()}.gpx",
+                                gpxData = gpx
+                            )
+                            if (savedUri != null) {
+                                shareGpxFile(context, savedUri)
+                            }
 
-            Button(
-                onClick = {
-                    if (exportTrail.isNotEmpty()) {
-                        val gpx = buildGpxXml(
-                            points = exportTrail,
-                            name = "Indoor Walk"
-                        )
+                        }
+                        else {
 
-                        val savedUri = saveGpxToDownloads(
-                            context = context,
-                            fileName = "indoor_walk_${System.currentTimeMillis()}.gpx",
-                            gpxData = gpx
-                        )
-                        if (savedUri != null) {
-                            shareGpxFile(context, savedUri)
                         }
 
                     }
+                ) {
+                    Text("Download & Share GPX")
                 }
-            ) {
-                Text("Download & Share GPX")
             }
-
 
         }
     }

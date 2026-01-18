@@ -39,6 +39,10 @@ class MainActivity : ComponentActivity() {
     // step reset baseline
     private var previousTotalSteps = 0f
 
+    private var stepOffset = 0
+    private var lastSeenSensorValue = 0
+
+
     // --------------------------------------------------
 
     private fun startSession() {
@@ -94,6 +98,8 @@ class MainActivity : ComponentActivity() {
         val initialTrail = stringToTrail(savedTrailString)
         val savedTrailSteps = shared.getInt("savedTrailSteps", 0)
         isSessionRunningFlow.value = wasRunning
+        stepOffset = shared.getInt("stepOffset", 0)
+        lastSeenSensorValue = shared.getInt("lastSeenSensorValue", 0)
 
         val defaultLat = shared.getFloat("defaultLat", 2.9278f).toDouble()
         val defaultLon = shared.getFloat("defaultLon", 101.6419f).toDouble()
@@ -163,6 +169,13 @@ class MainActivity : ComponentActivity() {
                             // 🔥 ADD THIS
                             onTrailGenerated = { trail ->
                                 trailState.value = trail // save trail
+                            } ,
+                            onClearSavedData = {
+                                shared.edit {
+                                    putString("savedTrail", "") // Wipe the trail string
+                                    putInt("savedTrailSteps", 0) // Wipe the step memory
+                                    // Do NOT wipe "isSessionRunning" here, because we are about to start!
+                                }
                             }
                         )
                     }
@@ -199,7 +212,28 @@ class MainActivity : ComponentActivity() {
     private val sensorListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent?) {
             event ?: return
-            totalStepsFlow.value = event.values[0].toInt()
+
+            val rawSensorSteps = event.values[0].toInt()
+
+
+            if (rawSensorSteps < lastSeenSensorValue){
+
+                stepOffset += lastSeenSensorValue
+
+                getSharedPreferences("myPrefs", MODE_PRIVATE).edit{
+                    putInt("stepOffset", stepOffset)
+                }
+            }
+
+            lastSeenSensorValue = rawSensorSteps
+
+            getSharedPreferences("myPrefs", MODE_PRIVATE).edit {
+                putInt("lastSeenSensorValue", lastSeenSensorValue)
+            }
+
+            val adjustedTotal = rawSensorSteps + stepOffset
+
+            totalStepsFlow.value = adjustedTotal
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
