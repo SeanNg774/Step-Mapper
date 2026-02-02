@@ -12,54 +12,6 @@ data class TrailPoint(
     val time: LocalDateTime
 )
 
-object TrailGenerator {
-
-    @RequiresApi(Build.VERSION_CODES.O)
-    fun generateTrail(
-        steps: Int,
-        startLat: Double,
-        startLon: Double,
-        stepLengthMeters: Double = 0.7,
-    ): List<TrailPoint> {
-
-        val totalDistance = steps * stepLengthMeters
-        val points = mutableListOf<TrailPoint>()
-
-        var currentLat = startLat
-        var currentLon = startLon
-        var direction = Math.random() * 360
-        var currentTime = LocalDateTime.now()
-
-        points.add(TrailPoint(currentLat, currentLon, currentTime))
-
-        var distanceWalked = 0.0
-
-        while (distanceWalked < totalDistance) {
-
-            // Move 1 to 3 meters randomly
-            val stepDist = (1..3).random().toDouble()
-
-            val rad = Math.toRadians(direction)
-            val dLat = (stepDist / 111_320.0) * cos(rad)
-            val dLon = (stepDist / 111_320.0) * sin(rad)
-
-            currentLat += dLat
-            currentLon += dLon
-
-            distanceWalked += stepDist
-
-            // Add slight direction change ±20°
-            direction += (-20..20).random()
-
-            // Add timestamp
-            currentTime = currentTime.plusSeconds(stepDist.toLong())
-
-            points.add(TrailPoint(currentLat, currentLon, currentTime))
-        }
-
-        return points
-    }
-}
 
 
 @RequiresApi(Build.VERSION_CODES.O)
@@ -68,7 +20,7 @@ fun extendTrail(
     startLon: Double,
     startTime: LocalDateTime,
     steps: Int,
-    stepLengthMeters: Double = 0.7,
+    stepLengthMeters: Double ,
 ): List<TrailPoint> {
 
     if (steps <= 0) return emptyList()

@@ -1,34 +1,38 @@
 package com.example.stepcounter3
 
 import android.Manifest
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
 import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
-import kotlinx.coroutines.flow.MutableStateFlow
-import com.example.stepcounter3.ui.StepCounterScreen
 import androidx.core.content.edit
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.stepcounter3.ui.MapScreen
+import com.example.stepcounter3.ui.StepCounterScreen
+import com.google.maps.android.compose.MapType
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
+import java.time.LocalDateTime
 import java.time.ZoneOffset
-import com.example.stepcounter3.TrailPoint
 
 class MainActivity : ComponentActivity() {
-
-    private lateinit var sensorManager: SensorManager
-    private var stepSensor: Sensor? = null
 
     // -------- REAL-TIME FLOWS -------- //
     private val totalStepsFlow = MutableStateFlow(0)
@@ -39,15 +43,93 @@ class MainActivity : ComponentActivity() {
     // step reset baseline
     private var previousTotalSteps = 0f
 
-    private var stepOffset = 0
-    private var lastSeenSensorValue = 0
+    // Trail State (Passed between screens)
+    private val trailState = mutableStateOf<List<TrailPoint>>(emptyList())
 
+    // -------- SERVICE CONNECTION -------- //
+    private var stepService: StepService? = null
+    private var isBound = false
 
-    // --------------------------------------------------
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(className: ComponentName, service: IBinder) {
+            val binder = service as StepService.LocalBinder
+            stepService = binder.getService()
+            isBound = true
 
-    private fun startSession() {
-        val startTime = System.currentTimeMillis()
-        val startSteps = totalStepsFlow.value
+            // 🔥 Connect Service Data to UI Flow WITH FIX
+            lifecycleScope.launch {
+                stepService?.totalSteps?.collect { steps ->
+
+                    // RETROACTIVE FIX:
+                    // If the session is running, but the sensor just "woke up" (went from 0 to something),
+                    // we need to update the baseline so the session doesn't start with phantom steps.
+                    if (isSessionRunningFlow.value && steps > 0) {
+                        val currentBaseline = sessionStartStepsFlow.value
+                        val startTime = sessionStartTimeFlow.value
+
+                        // If baseline is 0 (or we just started < 2 seconds ago), snap baseline to current steps
+                        // This handles the case where you walked 23 steps while app was closed.
+                        if (currentBaseline == 0 || (System.currentTimeMillis() - startTime < 2000)) {
+                            // Only update if the jump is weird (e.g. we thought it was 0, now it's 23)
+                            if (steps > currentBaseline) {
+                                sessionStartStepsFlow.value = steps
+
+                                // Save to disk so it persists
+                                getSharedPreferences("myPrefs", MODE_PRIVATE).edit {
+                                    putInt("sessionStartSteps", steps)
+                                }
+                            }
+                        }
+                    }
+
+                    totalStepsFlow.value = steps
+                }
+            }
+        }
+        override fun onServiceDisconnected(arg0: ComponentName) {
+            isBound = false
+        }
+    }
+
+    // -------- LIFECYCLE -------- //
+    override fun onStart() {
+        super.onStart()
+        // Bind to the service so we can receive step updates
+        Intent(this, StepService::class.java).also { intent ->
+            bindService(intent, connection, Context.BIND_AUTO_CREATE)
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (isBound) {
+            unbindService(connection)
+            isBound = false
+        }
+    }
+
+    // -------- SESSION LOGIC -------- //
+    private fun startSession(resumeSteps: Int = 0, resumeDurationMillis: Long = 0L) {
+        val startIntent = Intent(this, StepService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(startIntent)
+        } else {
+            startService(startIntent)
+        }
+
+        // 🔥 FIX: Get the most accurate current total
+        // If the flow is 0 (Service hasn't replied yet), force-load from Prefs
+        var currentTotal = totalStepsFlow.value
+        if (currentTotal == 0) {
+            val shared = getSharedPreferences("myPrefs", MODE_PRIVATE)
+            val lastSeen = shared.getInt("lastSeenSensorValue", 0)
+            val offset = shared.getInt("stepOffset", 0)
+            currentTotal = lastSeen + offset
+        }
+
+        // Now calculate the baseline using the correct number
+        val startTime = System.currentTimeMillis() - resumeDurationMillis
+        val startSteps = currentTotal - resumeSteps
 
         sessionStartTimeFlow.value = startTime
         sessionStartStepsFlow.value = startSteps
@@ -61,9 +143,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun endSession(steps: Int, distanceKm: Double, speedKmh: Double) {
-        val endTime = System.currentTimeMillis()
+    private fun endSession(steps: Int, distanceKm: Double, speedKmh: Double, durationMillis: Long) {
+        // 1. Stop the Service
+        val stopIntent = Intent(this, StepService::class.java)
+        stopIntent.action = "STOP_SERVICE"
+        startService(stopIntent)
 
+        // 2. Save Data
+        val endTime = System.currentTimeMillis()
         isSessionRunningFlow.value = false
 
         val shared = getSharedPreferences("myPrefs", MODE_PRIVATE)
@@ -73,34 +160,49 @@ class MainActivity : ComponentActivity() {
             putInt("sessionSteps", steps)
             putFloat("sessionDistance", distanceKm.toFloat())
             putFloat("sessionSpeed", speedKmh.toFloat())
+            putLong("sessionDuration", durationMillis)
         }
     }
 
-    private val trailState = mutableStateOf<List<TrailPoint>>(emptyList())
     @RequiresApi(Build.VERSION_CODES.O)
-    private fun saveTrailToPrefs(trail: List<TrailPoint>, steps: Int) {
+    private fun saveTrailToPrefs(trail: List<TrailPoint>, steps: Int, durationMillis: Long) {
         val shared = getSharedPreferences("myPrefs", MODE_PRIVATE)
         shared.edit {
             putString("savedTrail", trailToString(trail))
-            putInt("savedTrailSteps", steps) // <--- Save the step count!
+            putInt("savedTrailSteps", steps)
+            putLong("savedTrailDuration", durationMillis)
         }
     }
-    // --------------------------------------------------
 
+    // -------- HELPERS -------- //
+    private fun saveBaseline(value: Float) {
+        getSharedPreferences("prefs", MODE_PRIVATE)
+            .edit { putFloat("baseline", value) }
+    }
+
+    private fun loadBaseline(): Float {
+        return getSharedPreferences("prefs", MODE_PRIVATE)
+            .getFloat("baseline", 0f)
+    }
+
+    // -------- ON CREATE -------- //
     @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Load session state if app was killed
+        // Load session state
         val shared = getSharedPreferences("myPrefs", MODE_PRIVATE)
         val wasRunning = shared.getBoolean("isSessionRunning", false)
         val savedTrailString = shared.getString("savedTrail", "") ?: ""
         val initialTrail = stringToTrail(savedTrailString)
         val savedTrailSteps = shared.getInt("savedTrailSteps", 0)
-        isSessionRunningFlow.value = wasRunning
-        stepOffset = shared.getInt("stepOffset", 0)
-        lastSeenSensorValue = shared.getInt("lastSeenSensorValue", 0)
+        val savedTrailDuration = shared.getLong("savedTrailDuration", 0L)
+        val lastFinishedSteps = shared.getInt("sessionSteps", 0)
+        val lastFinishedDuration = shared.getLong("sessionDuration", 0L)
 
+        isSessionRunningFlow.value = wasRunning
+
+        val savedStrideLength = shared.getFloat("strideLength", 0.7f).toDouble()
         val defaultLat = shared.getFloat("defaultLat", 2.9278f).toDouble()
         val defaultLon = shared.getFloat("defaultLon", 101.6419f).toDouble()
 
@@ -111,29 +213,30 @@ class MainActivity : ComponentActivity() {
 
         previousTotalSteps = loadBaseline()
 
-        sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
-        stepSensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+        // Permissions
+        val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
-        val permissionLauncher =
-            registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
-
-        if (
-            ContextCompat.checkSelfPermission(
-                this, Manifest.permission.ACTIVITY_RECOGNITION
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED) {
             permissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
         }
 
         setContent {
             MaterialTheme {
-
                 val navController = rememberNavController()
 
                 NavHost(navController, startDestination = "stepCounter") {
 
                     composable("stepCounter") {
                         StepCounterScreen(
+                            initialStrideLength = savedStrideLength,
+                            lastFinishedSteps = lastFinishedSteps,
+                            lastFinishedDuration = lastFinishedDuration,
+                            initialDuration = savedTrailDuration,
                             initialTrail = initialTrail,
                             initialSteps = savedTrailSteps,
                             defaultLat = defaultLat,
@@ -144,9 +247,9 @@ class MainActivity : ComponentActivity() {
                                     putFloat("defaultLon", lon.toFloat())
                                 }
                             },
-                            onTrailUpdated = { updatedTrail, currentSteps->
+                            onTrailUpdated = { updatedTrail, currentSteps, currentDuration ->
                                 trailState.value = updatedTrail
-                                saveTrailToPrefs(updatedTrail, currentSteps)
+                                saveTrailToPrefs(updatedTrail, currentSteps, currentDuration)
                             },
                             totalStepsFlow = totalStepsFlow,
                             previousTotalSteps = previousTotalSteps,
@@ -154,37 +257,40 @@ class MainActivity : ComponentActivity() {
                                 previousTotalSteps = totalStepsFlow.value.toFloat()
                                 saveBaseline(previousTotalSteps)
                             },
-                            onStartSession = { startSession() },
-                            onEndSession = { steps, distanceKm, speedKmh ->
-
+                            onStartSession = { resumeSteps, resumeDuration ->
+                                startSession(resumeSteps, resumeDuration)
+                            },
+                            onEndSession = { steps, distanceKm, speedKmh, durationMillis ->
                                 isSessionRunningFlow.value = false
-                                endSession(steps, distanceKm, speedKmh)
+                                endSession(steps, distanceKm, speedKmh, durationMillis)
                             },
                             isSessionRunningFlow = isSessionRunningFlow,
                             sessionStartTimeFlow = sessionStartTimeFlow,
                             sessionStartStepsFlow = sessionStartStepsFlow,
-
+                            onStrideLengthChanged = { newLength ->
+                                shared.edit { putFloat("strideLength", newLength.toFloat()) }
+                            },
                             onOpenMap = { navController.navigate("map") },
-
-                            // 🔥 ADD THIS
                             onTrailGenerated = { trail ->
-                                trailState.value = trail // save trail
-                            } ,
+                                trailState.value = trail
+                            },
                             onClearSavedData = {
                                 shared.edit {
-                                    putString("savedTrail", "") // Wipe the trail string
-                                    putInt("savedTrailSteps", 0) // Wipe the step memory
-                                    // Do NOT wipe "isSessionRunning" here, because we are about to start!
+                                    putString("savedTrail", "")
+                                    putInt("savedTrailSteps", 0)
                                 }
                             }
                         )
                     }
 
                     composable("map") {
-                        // 🔥 Pass the trail to MapScreen
+                        var currentMapType by remember { mutableStateOf(MapType.NORMAL) }
                         MapScreen(
                             trail = trailState.value,
-                            onBack = { navController.popBackStack() }
+                            mapType = currentMapType,
+                            onMapTypeToggle = {
+                                currentMapType = if (currentMapType == MapType.NORMAL) MapType.HYBRID else MapType.NORMAL
+                            }
                         )
                     }
                 }
@@ -192,62 +298,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-
-        override fun onResume() {
-        super.onResume()
-        stepSensor?.let {
-            sensorManager.registerListener(
-                sensorListener,
-                it,
-                SensorManager.SENSOR_DELAY_UI
-            )
-        }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        sensorManager.unregisterListener(sensorListener)
-    }
-
-    private val sensorListener = object : SensorEventListener {
-        override fun onSensorChanged(event: SensorEvent?) {
-            event ?: return
-
-            val rawSensorSteps = event.values[0].toInt()
-
-
-            if (rawSensorSteps < lastSeenSensorValue){
-
-                stepOffset += lastSeenSensorValue
-
-                getSharedPreferences("myPrefs", MODE_PRIVATE).edit{
-                    putInt("stepOffset", stepOffset)
-                }
-            }
-
-            lastSeenSensorValue = rawSensorSteps
-
-            getSharedPreferences("myPrefs", MODE_PRIVATE).edit {
-                putInt("lastSeenSensorValue", lastSeenSensorValue)
-            }
-
-            val adjustedTotal = rawSensorSteps + stepOffset
-
-            totalStepsFlow.value = adjustedTotal
-        }
-
-        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
-    }
-
-    private fun saveBaseline(value: Float) {
-        getSharedPreferences("prefs", MODE_PRIVATE)
-            .edit { putFloat("baseline", value) }
-    }
-
-    private fun loadBaseline(): Float {
-        return getSharedPreferences("prefs", MODE_PRIVATE)
-            .getFloat("baseline", 0f)
-    }
     @RequiresApi(Build.VERSION_CODES.O)
     fun trailToString(trail: List<TrailPoint>): String {
         return trail.joinToString(";") { point ->
@@ -264,7 +314,7 @@ class MainActivity : ComponentActivity() {
                 TrailPoint(
                     lat = parts[0].toDouble(),
                     lon = parts[1].toDouble(),
-                    time = java.time.LocalDateTime.ofEpochSecond(parts[2].toLong(), 0, ZoneOffset.UTC)
+                    time = LocalDateTime.ofEpochSecond(parts[2].toLong(), 0, ZoneOffset.UTC)
                 )
             } else null
         }

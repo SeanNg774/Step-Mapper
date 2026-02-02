@@ -2,14 +2,11 @@ package com.example.stepcounter3.ui
 
 import android.os.Build
 import com.example.stepcounter3.TrailPoint
-import com.example.stepcounter3.TrailGenerator
 import android.widget.Toast
 import androidx.annotation.RequiresApi
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -30,7 +27,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import com.example.stepcounter3.buildGpxXml
 import com.example.stepcounter3.extendTrail
-import com.example.stepcounter3.saveGpxFile
 import com.example.stepcounter3.saveGpxToDownloads
 import com.example.stepcounter3.haversineMeters
 import java.time.Duration
@@ -39,7 +35,6 @@ import java.lang.Math
 import kotlin.math.cos
 import kotlin.math.sin
 import com.example.stepcounter3.shareGpxFile
-import com.google.maps.android.compose.rememberMarkerState
 import com.google.maps.android.compose.rememberUpdatedMarkerState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -47,6 +42,16 @@ import androidx.compose.ui.text.input.ImeAction
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.maps.android.compose.MapProperties
 import com.google.maps.android.compose.MapType
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.example.stepcounter3.PhotoTagger
+import java.time.format.DateTimeFormatter
+import android.net.Uri
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.ui.Alignment
 
 @Composable
 fun LocationPickerScreen(
@@ -64,6 +69,7 @@ fun LocationPickerScreen(
         position = CameraPosition.fromLatLngZoom(LatLng(startLat, startLon), 15f)
     }
     val markerState = rememberUpdatedMarkerState(position = selectedPos)
+    var currentMapType by remember { mutableStateOf(MapType.NORMAL) }
 
     LaunchedEffect(selectedPos) {
         markerState.position = selectedPos
@@ -88,11 +94,36 @@ fun LocationPickerScreen(
         GoogleMap(
             modifier = Modifier.fillMaxSize(),
             cameraPositionState = cameraPositionState,
-            onMapClick = { latLng -> updateFromMap(latLng) }
+            onMapClick = { latLng -> updateFromMap(latLng) },
+            properties = MapProperties(
+                mapType = currentMapType,
+                isMyLocationEnabled = false
+            ),
+
         ) {
             Marker(
                 state = markerState,
                 title = "Selected Location"
+            )
+        }
+        IconButton(
+            onClick = {
+                // Cycle: Normal -> Hybrid -> Normal
+                currentMapType = if (currentMapType == MapType.NORMAL) {
+                    MapType.HYBRID
+                } else {
+                    MapType.NORMAL
+                }
+            },
+            modifier = Modifier
+                .padding(16.dp)
+                .align(Alignment.CenterEnd)
+                .background(Color.White.copy(alpha = 0.7f), shape = CircleShape)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Layers, // Or Icons.Default.Layers if available
+                contentDescription = "Switch Map Type",
+                tint = Color.Black
             )
         }
 
@@ -172,7 +203,8 @@ fun LocationPickerScreen(
 @Composable
 fun MapScreen(
     trail: List<TrailPoint>,
-    onBack: () -> Unit
+    onMapTypeToggle: () -> Unit,
+    mapType: MapType,
 ) {
     val cameraPositionState = rememberCameraPositionState()
 
@@ -200,7 +232,11 @@ fun MapScreen(
 
         GoogleMap(
             modifier = Modifier.fillMaxSize(),
-            cameraPositionState = cameraPositionState
+            cameraPositionState = cameraPositionState,
+            properties = MapProperties(
+                mapType = mapType,
+                isMyLocationEnabled = false // Set true if you want blue dot (requires permission)
+            )
         ) {
 
             // Draw polyline (the walking trail)
@@ -229,16 +265,19 @@ fun MapScreen(
             }
         }
 
-        // Back Button
+
         IconButton(
-            onClick = onBack,
+            onClick = onMapTypeToggle,
             modifier = Modifier
                 .padding(16.dp)
-                .align(Alignment.TopStart)
+                .align(Alignment.TopEnd)
+                .background(Color.White.copy(alpha = 0.7f), shape = CircleShape)
         ) {
+            // Pick an icon (Layers is standard, but Info/Settings works too if Layers isn't available)
             Icon(
-                imageVector = Icons.Default.ArrowBack,
-                contentDescription = "Back",
+                // You can use Icons.Default.Layers if available, or just use Info/Settings
+                imageVector = Icons.Default.Layers,
+                contentDescription = "Switch Map Type",
                 tint = Color.Black
             )
         }
@@ -248,19 +287,24 @@ fun MapScreen(
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun StepCounterScreen(
+    initialStrideLength: Double,
+    onStrideLengthChanged: (Double) -> Unit,
+    lastFinishedSteps: Int,
+    lastFinishedDuration: Long,
+    initialDuration: Long,
     onClearSavedData: () -> Unit,
     defaultLat: Double,
     defaultLon: Double,
     onSaveStartLocation: (Double, Double) -> Unit,
     initialTrail: List<TrailPoint>,
-    onTrailUpdated: (List<TrailPoint>, Int) -> Unit,
+    onTrailUpdated: (List<TrailPoint>, Int, Long) -> Unit,
     initialSteps: Int,
     onOpenMap: () -> Unit,
     totalStepsFlow: MutableStateFlow<Int>,
     previousTotalSteps: Float,
     onReset: () -> Unit,
-    onStartSession: () -> Unit,
-    onEndSession: (steps: Int, distanceKm: Double, speedKmh: Double) -> Unit,
+    onStartSession: (Int, Long) -> Unit,
+    onEndSession: (Int, Double, Double, Long) -> Unit,
     isSessionRunningFlow: MutableStateFlow<Boolean>,
     sessionStartTimeFlow: MutableStateFlow<Long>,
     sessionStartStepsFlow: MutableStateFlow<Int>,
@@ -273,7 +317,9 @@ fun StepCounterScreen(
     val isSessionRunning by isSessionRunningFlow.collectAsState()
     val sessionStartTime by sessionStartTimeFlow.collectAsState()
     val sessionStartSteps by sessionStartStepsFlow.collectAsState()
-
+    var showUnmatchedDialog by remember { mutableStateOf(false) }
+    var unmatchedUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var manualTagIndex by remember { mutableStateOf(0f) } // Float for slider
     var homeLat by remember { mutableStateOf(defaultLat) }
     var homeLon by remember { mutableStateOf(defaultLon) }
     var isPickingLocation by remember { mutableStateOf(false) }
@@ -296,8 +342,11 @@ fun StepCounterScreen(
     var walkingDirection by remember {
         mutableStateOf(Math.random() * 360)
     }
+    var strideLength by remember { mutableStateOf(initialStrideLength) }
+    var showStrideDialog by remember { mutableStateOf(false) }
     var resumePoint by remember { mutableStateOf(initialTrail.lastOrNull()) }
     var currentMapType by remember { mutableStateOf(MapType.NORMAL) }
+    var lastSessionDuration by remember {mutableStateOf(0L)}
     val mapTrail =
         if (isSessionRunning) liveTrail else lastSessionTrail
 
@@ -326,6 +375,27 @@ fun StepCounterScreen(
         )
         return // Stop rendering the rest of the UI behind the map
     }
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments(),
+        onResult = { uris ->
+            if (uris.isNotEmpty()) {
+                val trailToUse = if (lastSessionTrail.isNotEmpty()) lastSessionTrail else liveTrail
+
+                // 1. Try Auto-Tagging
+                val result = PhotoTagger.tagAuto(context, trailToUse, uris)
+
+                // 2. Handle Results
+                if (result.unmatchedUris.isNotEmpty()) {
+                    // Trigger the prompt (FR6.2)
+                    unmatchedUris = result.unmatchedUris
+                    showUnmatchedDialog = true
+                    Toast.makeText(context, "${result.taggedCount} matched. ${result.unmatchedUris.size}photo(s) need manual placement.", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "Done!", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    )
 
 
     // Tick every second while session is running
@@ -343,40 +413,47 @@ fun StepCounterScreen(
         }
     }
     */
-    LaunchedEffect(isSessionRunning, totalSteps) {
-        if (isSessionRunning && lastStepCheckpoint == 0 && totalSteps > 0) {
-            lastStepCheckpoint = totalSteps
-        }
-    }
-
     LaunchedEffect(totalSteps, isSessionRunning) {
         if (!isSessionRunning) return@LaunchedEffect
 
-        // Safety check
-        if (lastStepCheckpoint == 0) return@LaunchedEffect
+        // 1. SENSOR WAKE-UP GUARD (The Fix)
+        // If the checkpoint is 0 (just started) and the sensor reports real steps (e.g., 23),
+        // we assume these are pre-existing steps. Snap to them without drawing.
+        if (lastStepCheckpoint == 0 && totalSteps > 0) {
+            lastStepCheckpoint = totalSteps
+            return@LaunchedEffect
+        }
 
-        // Handle sensor reset (device reboot)
+        // 2. SENSOR RESET GUARD (Device reboot)
         if (totalSteps < lastStepCheckpoint) {
+            lastStepCheckpoint = totalSteps
+            return@LaunchedEffect
+        }
+
+        val sessionAge = System.currentTimeMillis() - sessionStartTime
+        if (sessionAge < 1000) {
             lastStepCheckpoint = totalSteps
             return@LaunchedEffect
         }
 
         val stepsSinceCheckpoint = totalSteps - lastStepCheckpoint
 
-        // Threshold to update
+        // 3. NORMAL WALKING LOGIC
+        // Only draw if we have moved enough steps AND we are past the initialization phase
         if (stepsSinceCheckpoint >= 10) {
 
             // 1. CATCH UP MODE (App was killed/paused)
             if (stepsSinceCheckpoint > 50) {
+                // ... (Keep your existing catch-up logic) ...
                 val missedPath = extendTrail(
                     startLat = currentLat,
                     startLon = currentLon,
                     startTime = lastCheckpointTime,
-                    steps = stepsSinceCheckpoint
+                    steps = stepsSinceCheckpoint,
+                    stepLengthMeters = strideLength
                 )
                 liveTrail = liveTrail + missedPath
 
-                // Update location to the end of the new path
                 if (missedPath.isNotEmpty()) {
                     val last = missedPath.last()
                     currentLat = last.lat
@@ -384,10 +461,11 @@ fun StepCounterScreen(
                     lastCheckpointTime = last.time
                 }
             }
-            // 2. NORMAL WALKING MODE (Live updates)
+            // 2. NORMAL MODE
             else {
+                // ... (Keep your existing normal logic) ...
                 val now = LocalDateTime.now()
-                val distanceMeters = stepsSinceCheckpoint * 0.7
+                val distanceMeters = stepsSinceCheckpoint * strideLength
 
                 // Drift direction slightly
                 walkingDirection += (-10..10).random()
@@ -402,8 +480,9 @@ fun StepCounterScreen(
             }
 
             // 3. SAVE STATE
+            val currentDuration = System.currentTimeMillis() - sessionStartTime
             lastStepCheckpoint = totalSteps
-            onTrailUpdated(liveTrail, totalSteps)
+            onTrailUpdated(liveTrail, totalSteps, currentDuration)
         }
     }
 
@@ -417,7 +496,7 @@ fun StepCounterScreen(
     // Calculate distance and speed
     val stepLengthMeters = 0.7 // average step length
     val sessionSteps = if (isSessionRunning) totalSteps - sessionStartSteps else 0
-    val distanceMeters = sessionSteps * stepLengthMeters
+    val distanceMeters = sessionSteps * strideLength
     val distanceKm = distanceMeters / 1000.0
     val speedKmh = if (elapsedTime > 0) distanceMeters / elapsedTime * 3.6 else 0.0
     val averageSpeedMps = if (totalDurationSeconds > 0) distanceMeters / totalDurationSeconds else 0.0
@@ -434,6 +513,12 @@ fun StepCounterScreen(
             if (time > 0) (dist / time) * 3.6 else 0.0
         }
     }
+    val rawTrail = when {
+        isSessionRunning && liveTrail.isNotEmpty() -> liveTrail
+        lastSessionTrail.isNotEmpty() -> lastSessionTrail
+        else -> generatedTrail
+    }
+    
     val exportTrail = when {
         isSessionRunning && liveTrail.isNotEmpty() -> liveTrail
         lastSessionTrail.isNotEmpty() -> lastSessionTrail
@@ -457,12 +542,19 @@ fun StepCounterScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        //.height(250.dp)
                         .weight(1f)
                 ) {
                     MapScreen(
                         trail = mapTrail,
-                        onBack = {}
+                        mapType = currentMapType, // <--- Pass State
+                        onMapTypeToggle = {
+                            // Toggle Logic: Normal -> Satellite -> Hybrid -> Normal
+                            currentMapType = when (currentMapType) {
+                                MapType.NORMAL -> MapType.HYBRID
+                                else -> MapType.NORMAL
+                            }
+                        },
+
                     )
                 }
 
@@ -494,19 +586,28 @@ fun StepCounterScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Button(
                     onClick = {
-                        liveTrail = emptyList()
-                        lastUpdatedSteps = 0
+                        // 1. CLEANUP FIRST
+                        onClearSavedData()
 
+                        // 2. SETUP VARIABLES
+                        lastUpdatedSteps = 0
                         currentLat = homeLat
                         currentLon = homeLon
 
+                        // 3. CREATE START POINT
+                        val startPoint = TrailPoint(currentLat, currentLon, LocalDateTime.now())
+                        liveTrail = listOf(startPoint)
+                        onTrailUpdated(liveTrail, 0, 0L)
 
+                        // 4. RESET CHECKPOINTS
                         lastStepCheckpoint = totalSteps
                         lastCheckpointTime = LocalDateTime.now()
 
-                        onClearSavedData()
+                        // 5. SAVE NEW DATA (Must be after Clear!)
 
-                        onStartSession()
+
+                        // 6. START
+                        onStartSession(0, 0L)
                     },
                     enabled = !isSessionRunning
                 ) { Text("Start") }
@@ -521,8 +622,11 @@ fun StepCounterScreen(
                         lastSessionDistance = distanceKm
                         lastSessionSpeed = instantSpeedKmh
                         lastSessionTrail = liveTrail.toList()
+                        val finalDuration = elapsedTime * 1000L
+                        lastSessionDuration = finalDuration // Update local state too
 
-                        onEndSession(sessionSteps, distanceKm, instantSpeedKmh )
+
+                        onEndSession(sessionSteps, distanceKm, instantSpeedKmh, finalDuration )
                     },
                     enabled = isSessionRunning
                 ) { Text("End") }
@@ -534,23 +638,36 @@ fun StepCounterScreen(
             if (!isSessionRunning && resumePoint != null) {
                 Button(
                     onClick = {
-                        liveTrail = emptyList()
-                        lastUpdatedSteps = 0
+                        // A. DETERMINE HISTORY
+                        // Did we just click End? Or did we restart the app?
+                        val historyTrail = if (lastSessionTrail.isNotEmpty()) lastSessionTrail else initialTrail
+                        val historySteps = if (lastSessionSteps > 0) lastSessionSteps else lastFinishedSteps
+                        val historyDuration = if (lastSessionDuration > 0) lastSessionDuration else lastFinishedDuration
 
-                        // SET START TO PREVIOUS END POINT
+                        // B. LOAD TRAIL
+                        liveTrail = historyTrail
+
+                        // C. SET START POINT
                         resumePoint?.let { point ->
                             currentLat = point.lat
                             currentLon = point.lon
-
-                            // Optional: Update map to show where we are resuming
-                            homeLat = point.lat // Update home so it doesn't snap back later? (Optional)
-                            homeLon = point.lon
                         }
 
-                        onStartSession()
+                        // D. RESET COUNTERS
+                        lastUpdatedSteps = 0
+                        lastStepCheckpoint = totalSteps
+                        lastCheckpointTime = LocalDateTime.now()
+
+                        // E. SAVE STATE IMMEDIATELY
+                        onClearSavedData()
+                        onTrailUpdated(liveTrail, totalSteps, historyDuration)
+
+                        // F. START WITH RESUME VALUES!
+                        // This "backdates" the timer and step counter
+                        onStartSession(historySteps, historyDuration)
                     }
                 ) {
-                    Text(" Resume from Last Point")
+                    Text(" Resume from Last Trail")
                 }
                 Spacer(modifier = Modifier.height(8.dp))
             }
@@ -561,6 +678,22 @@ fun StepCounterScreen(
                     Text(" Set Start Location")
                 }
                 Spacer(modifier = Modifier.height(8.dp))
+            }
+            if (!isSessionRunning && (lastSessionTrail.isNotEmpty() || initialTrail.isNotEmpty())) {
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Divider()
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Button(
+                    onClick = {
+                        // Open File Browser filtering for Images
+                        photoPickerLauncher.launch(arrayOf("image/*"))
+                    }
+                ) {
+                    Text("Select Photos to embed coordinates")
+                }
+
             }
 
             if(!isSessionRunning) {
@@ -591,8 +724,115 @@ fun StepCounterScreen(
                     Text("Download & Share GPX")
                 }
             }
+            if (!isSessionRunning) {
+                // ... Set Start Location Button ...
 
-        }
+                // 🔥 NEW BUTTON
+                Button(
+                    onClick = { showStrideDialog = true }
+                ) {
+                    Text("Set Stride Length (default =0.7m)")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            if (showStrideDialog) {
+                var textValue by remember { mutableStateOf(strideLength.toString()) }
+
+                AlertDialog(
+                    onDismissRequest = { showStrideDialog = false },
+                    title = { Text("Enter Stride Length (in meters)") },
+                    text = {
+                        Column {
+
+                            OutlinedTextField(
+                                value = textValue,
+                                onValueChange = { textValue = it },
+                                label = { Text("Meters") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                val newValue = textValue.toDoubleOrNull()
+                                if (newValue != null && newValue > 0.1 && newValue < 3.0) {
+                                    strideLength = newValue
+                                    onStrideLengthChanged(newValue) // Save to Prefs
+                                    showStrideDialog = false
+                                } else {
+                                    Toast.makeText(context, "Invalid number", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        ) {
+                            Text("Save")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showStrideDialog = false }) { Text("Cancel") }
+                    }
+                )
+            }
+
+
+            // --- FR6.2 PROMPT DIALOG ---
+            if (showUnmatchedDialog) {
+                val trailToUse = if (lastSessionTrail.isNotEmpty()) lastSessionTrail else liveTrail
+                val maxIndex = (trailToUse.size - 1).toFloat()
+
+                // Helper to format time for the slider label
+                val previewPoint = trailToUse.getOrNull(manualTagIndex.toInt())
+                val timeLabel = previewPoint?.time?.format(DateTimeFormatter.ofPattern("HH:mm:ss")) ?: "--:--"
+
+                AlertDialog(
+                    onDismissRequest = { showUnmatchedDialog = false },
+                    title = { Text("Unmatched Photos detected") },
+                    text = {
+                        Column {
+
+                            Text("Select a time/location to place them:", style = MaterialTheme.typography.titleSmall)
+
+                            // SLIDER to scrub through the walk
+                            Slider(
+                                value = manualTagIndex,
+                                onValueChange = { manualTagIndex = it },
+                                valueRange = 0f..maxIndex,
+                                steps = 0
+                            )
+
+                            Text(
+                                text = "Selected Time: $timeLabel",
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.align(Alignment.CenterHorizontally)
+                            )
+                            Text(
+                                text = "(Coordinate: ${String.format("%.4f", previewPoint?.lat)}, ${String.format("%.4f", previewPoint?.lon)})",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.align(Alignment.CenterHorizontally)
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                // Apply the manual tag
+                                val targetPoint = trailToUse.getOrElse(manualTagIndex.toInt()) { trailToUse.last() }
+                                val count = PhotoTagger.tagManual(context, unmatchedUris, targetPoint)
+
+                                Toast.makeText(context, "Done!", Toast.LENGTH_SHORT).show()
+                                showUnmatchedDialog = false
+                            }
+                        ) {
+                            Text("Apply to All")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showUnmatchedDialog = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
+            }
     }
-}
+}}
 
