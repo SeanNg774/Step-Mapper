@@ -477,7 +477,7 @@ fun StepCounterScreen(
                     lastCheckpointTime = last.time
                 }
             }
-            // 2. NORMAL MODE
+            // 2. NORMAL MODE.
             else {
                 // ... (Keep your existing normal logic) ...
                 val now = LocalDateTime.now()

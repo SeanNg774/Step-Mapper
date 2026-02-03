@@ -60,7 +60,7 @@ class MainActivity : ComponentActivity() {
             lifecycleScope.launch {
                 stepService?.totalSteps?.collect { steps ->
 
-                    // RETROACTIVE FIX:
+                    // RETROACTIVE FIX:.
                     // If the session is running, but the sensor just "woke up" (went from 0 to something),
                     // we need to update the baseline so the session doesn't start with phantom steps.
                     if (isSessionRunningFlow.value && steps > 0) {
