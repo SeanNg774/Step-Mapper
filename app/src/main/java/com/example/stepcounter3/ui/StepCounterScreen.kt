@@ -339,9 +339,6 @@ fun StepCounterScreen(
     var lastUpdatedSteps by remember { mutableStateOf(0) }
     // Revert this to the simple version
     var lastStepCheckpoint by remember { mutableStateOf(initialSteps) }
-    var lastResumeTime by remember {
-        mutableStateOf(if (isSessionRunning) System.currentTimeMillis() else 0L)
-    }
     var lastCheckpointTime by remember { mutableStateOf(LocalDateTime.now()) }
     var walkingDirection by remember {
         mutableStateOf(Math.random() * 360)
@@ -449,8 +446,8 @@ fun StepCounterScreen(
             return@LaunchedEffect
         }
 
-        val timeSinceResume = System.currentTimeMillis() - lastResumeTime
-        if (timeSinceResume < 2000) {
+        val sessionAge = System.currentTimeMillis() - sessionStartTime
+        if (sessionAge < 1000) {
             lastStepCheckpoint = totalSteps
             return@LaunchedEffect
         }
@@ -541,7 +538,7 @@ fun StepCounterScreen(
         lastSessionTrail.isNotEmpty() -> lastSessionTrail
         else -> generatedTrail
     }
-
+    
     val exportTrail = when {
         isSessionRunning && liveTrail.isNotEmpty() -> liveTrail
         lastSessionTrail.isNotEmpty() -> lastSessionTrail
@@ -630,8 +627,6 @@ fun StepCounterScreen(
 
 
                         // 6. START
-                        lastResumeTime = System.currentTimeMillis()
-
                         onStartSession(0, 0L)
                     },
                     enabled = !isSessionRunning
@@ -680,10 +675,9 @@ fun StepCounterScreen(
 
                         // D. RESET COUNTERS
                         lastUpdatedSteps = 0
-                        lastStepCheckpoint = totalStepsFlow.value
+                        lastStepCheckpoint = totalSteps
                         lastCheckpointTime = LocalDateTime.now()
 
-                        lastResumeTime = System.currentTimeMillis()
                         // E. SAVE STATE IMMEDIATELY
                         onClearSavedData()
                         onTrailUpdated(liveTrail, totalSteps, historyDuration)
