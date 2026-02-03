@@ -34,6 +34,7 @@ fun buildGpxXml(points: List<TrailPoint>, name: String = "TrailRun"): String {
 
     val formatter = DateTimeFormatter.ISO_INSTANT
 
+    // Calculate total stats
     val startTime = points.first().time
     val endTime = points.last().time
     val durationSeconds = Duration.between(startTime, endTime).seconds
@@ -42,20 +43,27 @@ fun buildGpxXml(points: List<TrailPoint>, name: String = "TrailRun"): String {
     }.sum()
     val avgSpeedKmh = if (durationSeconds > 0) totalDistanceMeters / durationSeconds * 3.6 else 0.0
 
-    val trackPointsXml = points.zipWithNext { a, b ->
-        val dist = haversineMeters(a.lat, a.lon, b.lat, b.lon)
-        val duration = Duration.between(a.time, b.time).seconds
-        val speedKmh = if (duration > 0) dist / duration * 3.6 else 0.0
-        val utcTime = b.time.atZone(java.time.ZoneId.systemDefault()).toInstant()
+    // GENERATE XML (Single Loop)
+    val trackPointsXml = points.mapIndexed { index, point ->
+        val utcTime = point.time.atZone(java.time.ZoneId.systemDefault()).toInstant()
 
-        """<trkpt lat="${b.lat}" lon="${b.lon}">
-        <time>${formatter.format(utcTime)}</time>
-        <extensions>
-            <speed>${"%.2f".format(speedKmh)}</speed>
-        </extensions>
-    </trkpt>""".trimIndent()
+        // Calculate speed only if we have a previous point
+        val speedKmh = if (index == 0) {
+            0.0 // Start point has 0 speed
+        } else {
+            val prev = points[index - 1]
+            val dist = haversineMeters(prev.lat, prev.lon, point.lat, point.lon)
+            val duration = Duration.between(prev.time, point.time).seconds
+            if (duration > 0) dist / duration * 3.6 else 0.0
+        }
+
+        """<trkpt lat="${point.lat}" lon="${point.lon}">
+            <time>${formatter.format(utcTime)}</time>
+            <extensions>
+                <speed>${"%.2f".format(speedKmh)}</speed>
+            </extensions>
+        </trkpt>""".trimIndent()
     }.joinToString("\n")
-
 
     return """
         <gpx version="1.1" creator="IndoorWalkApp" xmlns="http://www.topografix.com/GPX/1/1">
@@ -71,16 +79,6 @@ fun buildGpxXml(points: List<TrailPoint>, name: String = "TrailRun"): String {
             </trk>
         </gpx>
     """.trimIndent()
-}
-fun saveGpxFile(context: Context, fileName: String, gpxData: String): Uri {
-    val file = File(context.filesDir, fileName)
-    file.writeText(gpxData)
-
-    return FileProvider.getUriForFile(
-        context,
-        "${context.packageName}.provider",
-        file
-    )
 }
 
 @RequiresApi(Build.VERSION_CODES.Q)

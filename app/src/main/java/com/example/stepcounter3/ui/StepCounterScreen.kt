@@ -337,7 +337,11 @@ fun StepCounterScreen(
         mutableStateOf(initialTrail.lastOrNull()?.lon ?: homeLon)
     }
     var lastUpdatedSteps by remember { mutableStateOf(0) }
+    // Revert this to the simple version
     var lastStepCheckpoint by remember { mutableStateOf(initialSteps) }
+    var lastResumeTime by remember {
+        mutableStateOf(if (isSessionRunning) System.currentTimeMillis() else 0L)
+    }
     var lastCheckpointTime by remember { mutableStateOf(LocalDateTime.now()) }
     var walkingDirection by remember {
         mutableStateOf(Math.random() * 360)
@@ -347,6 +351,21 @@ fun StepCounterScreen(
     var resumePoint by remember { mutableStateOf(initialTrail.lastOrNull()) }
     var currentMapType by remember { mutableStateOf(MapType.NORMAL) }
     var lastSessionDuration by remember {mutableStateOf(0L)}
+    // ... variable declarations ...
+
+    // 🔥 NEW: Sync checkpoint when sessionStartSteps loads from memory
+    LaunchedEffect(sessionStartSteps, isSessionRunning) {
+        // If we are resuming a running session that has no trail yet (just the start point),
+        // we must align the checkpoint with the Session Start, otherwise we get a huge "lifetime" trail.
+        if (isSessionRunning && initialTrail.size <= 1 && sessionStartSteps > 0) {
+            // Only update if the checkpoint is currently "behind" (e.g., 0)
+            if (lastStepCheckpoint < sessionStartSteps) {
+                lastStepCheckpoint = sessionStartSteps
+            }
+        }
+    }
+
+    // ... existing LaunchedEffect(totalSteps) ...
     val mapTrail =
         if (isSessionRunning) liveTrail else lastSessionTrail
 
@@ -430,8 +449,8 @@ fun StepCounterScreen(
             return@LaunchedEffect
         }
 
-        val sessionAge = System.currentTimeMillis() - sessionStartTime
-        if (sessionAge < 1000) {
+        val timeSinceResume = System.currentTimeMillis() - lastResumeTime
+        if (timeSinceResume < 2000) {
             lastStepCheckpoint = totalSteps
             return@LaunchedEffect
         }
@@ -471,8 +490,12 @@ fun StepCounterScreen(
                 walkingDirection += (-10..10).random()
                 val rad = Math.toRadians(walkingDirection)
 
-                currentLat += (distanceMeters / 111_320.0) * cos(rad)
-                currentLon += (distanceMeters / 111_320.0) * sin(rad)
+                val metersPerDegLat = 111_320.0
+                val metersPerDegLon = 111_320.0 * cos(Math.toRadians(currentLat)) // Scale by Latitude
+
+// 2. Apply to coordinates
+                currentLat += (distanceMeters / metersPerDegLat) * cos(rad)
+                currentLon += (distanceMeters / metersPerDegLon) * sin(rad)
 
                 val newPoint = TrailPoint(currentLat, currentLon, now)
                 liveTrail = liveTrail + newPoint
@@ -518,7 +541,7 @@ fun StepCounterScreen(
         lastSessionTrail.isNotEmpty() -> lastSessionTrail
         else -> generatedTrail
     }
-    
+
     val exportTrail = when {
         isSessionRunning && liveTrail.isNotEmpty() -> liveTrail
         lastSessionTrail.isNotEmpty() -> lastSessionTrail
@@ -607,6 +630,8 @@ fun StepCounterScreen(
 
 
                         // 6. START
+                        lastResumeTime = System.currentTimeMillis()
+
                         onStartSession(0, 0L)
                     },
                     enabled = !isSessionRunning
@@ -655,9 +680,10 @@ fun StepCounterScreen(
 
                         // D. RESET COUNTERS
                         lastUpdatedSteps = 0
-                        lastStepCheckpoint = totalSteps
+                        lastStepCheckpoint = totalStepsFlow.value
                         lastCheckpointTime = LocalDateTime.now()
 
+                        lastResumeTime = System.currentTimeMillis()
                         // E. SAVE STATE IMMEDIATELY
                         onClearSavedData()
                         onTrailUpdated(liveTrail, totalSteps, historyDuration)

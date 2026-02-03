@@ -109,33 +109,25 @@ object PhotoTagger {
 
     @RequiresApi(Build.VERSION_CODES.O)
     private fun getPhotoTime(context: Context, uri: Uri): LocalDateTime? {
-        // A. Try EXIF (Most Accurate)
+        // 1. Try EXIF "Original" tag (Best for Camera Photos)
         try {
             context.contentResolver.openInputStream(uri)?.use { stream ->
                 val exif = ExifInterface(stream)
+                val dateTimeOriginal = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
 
-                // Try multiple tags (Original is best, DateTime is fallback)
-                val dateTimeString = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
-                    ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
-                    ?: exif.getAttribute(ExifInterface.TAG_GPS_DATESTAMP) // Rare but possible
-
-                if (dateTimeString != null) {
-                    // 🔥 FIX: Clean the string (remove null chars/spaces) and handle different separators
-                    val cleanString = dateTimeString.trim().replace("\u0000", "")
-
-                    // Standard EXIF: "yyyy:MM:dd HH:mm:ss"
-                    // Some Phones: "yyyy-MM-dd HH:mm:ss"
+                if (dateTimeOriginal != null) {
+                    val cleanString = dateTimeOriginal.trim().replace("\u0000", "")
                     val pattern = if (cleanString.contains("-")) "yyyy-MM-dd HH:mm:ss" else "yyyy:MM:dd HH:mm:ss"
-
                     return LocalDateTime.parse(cleanString, DateTimeFormatter.ofPattern(pattern))
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "EXIF parse failed: ${e.message}, falling back to MediaStore")
+            Log.w(TAG, "EXIF Original parse failed: ${e.message}")
         }
 
-        // B. Fallback to MediaStore (Database)
-        // This is safer if EXIF is corrupt or missing
+        // 2. Try MediaStore (Best for Screenshots & Downloads)
+        // We do this BEFORE the generic 'TAG_DATETIME' because MediaStore
+        // handles UTC-to-Local conversion correctly.
         try {
             val cursor = context.contentResolver.query(
                 uri, arrayOf(MediaStore.Images.Media.DATE_TAKEN), null, null, null
@@ -146,7 +138,7 @@ object PhotoTagger {
                     if (dateTaken > 0) {
                         return LocalDateTime.ofInstant(
                             java.time.Instant.ofEpochMilli(dateTaken),
-                            ZoneId.systemDefault()
+                            ZoneId.systemDefault() // <--- This fixes the TimeZone issue
                         )
                     }
                 }
@@ -155,9 +147,25 @@ object PhotoTagger {
             Log.e(TAG, "MediaStore lookup failed")
         }
 
+        // 3. Last Resort: Generic EXIF DateTime
+        // (Often corresponds to file modified time, which might be UTC, causing the bug)
+        try {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                val exif = ExifInterface(stream)
+                val dateTimeGeneric = exif.getAttribute(ExifInterface.TAG_DATETIME)
+
+                if (dateTimeGeneric != null) {
+                    val cleanString = dateTimeGeneric.trim().replace("\u0000", "")
+                    val pattern = if (cleanString.contains("-")) "yyyy-MM-dd HH:mm:ss" else "yyyy:MM:dd HH:mm:ss"
+                    return LocalDateTime.parse(cleanString, DateTimeFormatter.ofPattern(pattern))
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "EXIF Generic parse failed")
+        }
+
         return null
     }
-
     @RequiresApi(Build.VERSION_CODES.O)
     private fun findClosestLocation(trail: List<TrailPoint>, time: LocalDateTime): TrailPoint {
         // Finds the point with the smallest time difference

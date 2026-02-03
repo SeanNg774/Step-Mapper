@@ -37,9 +37,11 @@ fun extendTrail(
         val secondsPerStep = listOf(0.4, 0.6, 0.8, 1.0, 1.2).random()
 
         val rad = Math.toRadians(direction)
+        val metersPerDegLat = 111_320.0
+        val metersPerDegLon = 111_320.0 * cos(Math.toRadians(lat)) // Calculate based on current lat
 
-        lat += (stepLengthMeters / 111_320.0) * cos(rad)
-        lon += (stepLengthMeters / 111_320.0) * sin(rad)
+        lat += (stepLengthMeters / metersPerDegLat) * cos(rad)
+        lon += (stepLengthMeters / metersPerDegLon) * sin(rad)
 
         time = time.plusNanos((secondsPerStep * 1_000_000_000).toLong())
 
