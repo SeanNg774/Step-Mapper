@@ -52,7 +52,29 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.ui.Alignment
+import java.time.LocalDateTime.now
+import com.google.android.gms.maps.model.BitmapDescriptorFactory
+import com.example.stepcounter3.R
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import androidx.core.content.ContextCompat
+import com.google.android.gms.maps.model.BitmapDescriptor
+import androidx.compose.ui.geometry.Offset
 
+
+fun bitmapDescriptorFromVector(context: Context, vectorResId: Int): BitmapDescriptor? {
+    val vectorDrawable = ContextCompat.getDrawable(context, vectorResId) ?: return null
+    vectorDrawable.setBounds(0, 0, vectorDrawable.intrinsicWidth, vectorDrawable.intrinsicHeight)
+    val bitmap = Bitmap.createBitmap(
+        vectorDrawable.intrinsicWidth,
+        vectorDrawable.intrinsicHeight,
+        Bitmap.Config.ARGB_8888
+    )
+    val canvas = Canvas(bitmap)
+    vectorDrawable.draw(canvas)
+    return BitmapDescriptorFactory.fromBitmap(bitmap)
+}
 @Composable
 fun LocationPickerScreen(
     startLat: Double,
@@ -207,6 +229,7 @@ fun MapScreen(
     mapType: MapType,
 ) {
     val cameraPositionState = rememberCameraPositionState()
+    val context = LocalContext.current
 
     // Move camera to first point when screen opens
     LaunchedEffect(trail) {
@@ -260,7 +283,9 @@ fun MapScreen(
             trail.lastOrNull()?.let { end ->
                 Marker(
                     state = MarkerState(LatLng(end.lat, end.lon)),
-                    title = "End"
+                    title = "End",
+                    icon = bitmapDescriptorFromVector(context, R.drawable.outline_flag_24),
+                    anchor = Offset(0.2f, 1.0f)
                 )
             }
         }
@@ -308,7 +333,8 @@ fun StepCounterScreen(
     isSessionRunningFlow: MutableStateFlow<Boolean>,
     sessionStartTimeFlow: MutableStateFlow<Long>,
     sessionStartStepsFlow: MutableStateFlow<Int>,
-    onTrailGenerated: (List<TrailPoint>) -> Unit
+    onTrailGenerated: (List<TrailPoint>) -> Unit,
+    onSyncStepBaseline: (Int) -> Unit,
 
 ) {
     val totalSteps by totalStepsFlow.collectAsState()
@@ -338,8 +364,12 @@ fun StepCounterScreen(
     }
     var lastUpdatedSteps by remember { mutableStateOf(0) }
     // Revert this to the simple version
-    var lastStepCheckpoint by remember { mutableStateOf(initialSteps) }
-    var lastCheckpointTime by remember { mutableStateOf(LocalDateTime.now()) }
+    var lastStepCheckpoint by remember {
+        mutableStateOf(sessionStartSteps + initialSteps)
+    }
+    var lastCheckpointTime by remember {
+        mutableStateOf(initialTrail.lastOrNull()?.time ?: LocalDateTime.now())
+    }
     var walkingDirection by remember {
         mutableStateOf(Math.random() * 360)
     }
@@ -348,6 +378,16 @@ fun StepCounterScreen(
     var resumePoint by remember { mutableStateOf(initialTrail.lastOrNull()) }
     var currentMapType by remember { mutableStateOf(MapType.NORMAL) }
     var lastSessionDuration by remember {mutableStateOf(0L)}
+
+    var sessionResumedTimestamp by remember { mutableStateOf(0L) }
+    var manualResumeTime by remember { mutableStateOf(0L) }
+
+// Listen for when the session starts or resumes
+    LaunchedEffect(isSessionRunning) {
+        if (isSessionRunning) {
+            sessionResumedTimestamp = System.currentTimeMillis()
+        }
+    }
     // ... variable declarations ...
 
     // 🔥 NEW: Sync checkpoint when sessionStartSteps loads from memory
@@ -406,8 +446,11 @@ fun StepCounterScreen(
                     unmatchedUris = result.unmatchedUris
                     showUnmatchedDialog = true
                     Toast.makeText(context, "${result.taggedCount} matched. ${result.unmatchedUris.size}photo(s) need manual placement.", Toast.LENGTH_SHORT).show()
+                } else if (result.taggedCount == 0) {
+                    // If unmatched is empty AND tagged is 0, it means the trail was empty or error occurred
+                    Toast.makeText(context, "No photos matched the trail time.", Toast.LENGTH_SHORT).show()
                 } else {
-                    Toast.makeText(context, "Done!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Done! ${result.taggedCount} photos tagged.", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -446,6 +489,17 @@ fun StepCounterScreen(
             return@LaunchedEffect
         }
 
+        if (manualResumeTime > 0 && (System.currentTimeMillis() - manualResumeTime < 3000)) {
+            val ghostSteps = totalSteps - lastStepCheckpoint
+
+            if (ghostSteps > 0) {
+                // Shift the baseline UP to hide these steps from the session total
+                onSyncStepBaseline(ghostSteps)
+            }
+            lastStepCheckpoint = totalSteps
+            return@LaunchedEffect
+        }
+
         val sessionAge = System.currentTimeMillis() - sessionStartTime
         if (sessionAge < 1000) {
             lastStepCheckpoint = totalSteps
@@ -460,13 +514,21 @@ fun StepCounterScreen(
 
             // 1. CATCH UP MODE (App was killed/paused)
             if (stepsSinceCheckpoint > 50) {
+                val estimatedSeconds = (stepsSinceCheckpoint * 0.6).toLong()
+                val calculatedEndTime = lastCheckpointTime.plusSeconds(estimatedSeconds)
+
+
+
+                val now = LocalDateTime.now()
+                val finalEndTime = if (calculatedEndTime.isAfter(now)) now else calculatedEndTime
                 // ... (Keep your existing catch-up logic) ...
                 val missedPath = extendTrail(
                     startLat = currentLat,
                     startLon = currentLon,
                     startTime = lastCheckpointTime,
                     steps = stepsSinceCheckpoint,
-                    stepLengthMeters = strideLength
+                    stepLengthMeters = strideLength,
+                    endTime = finalEndTime
                 )
                 liveTrail = liveTrail + missedPath
 
@@ -502,7 +564,8 @@ fun StepCounterScreen(
             // 3. SAVE STATE
             val currentDuration = System.currentTimeMillis() - sessionStartTime
             lastStepCheckpoint = totalSteps
-            onTrailUpdated(liveTrail, totalSteps, currentDuration)
+            val currentSessionSteps = totalSteps - sessionStartStepsFlow.value
+            onTrailUpdated(liveTrail, currentSessionSteps, currentDuration)
         }
     }
 
@@ -515,7 +578,13 @@ fun StepCounterScreen(
 
     // Calculate distance and speed
     val stepLengthMeters = 0.7 // average step length
-    val sessionSteps = if (isSessionRunning) totalSteps - sessionStartSteps else 0
+    val sessionSteps = if (isSessionRunning && totalSteps > 0) {
+        // 🔥 The .coerceAtLeast(0) forces it to ignore the negative math
+        // while waiting for the sensor to load.
+        (totalSteps - sessionStartSteps).coerceAtLeast(0)
+    } else {
+        0
+    }
     val distanceMeters = sessionSteps * strideLength
     val distanceKm = distanceMeters / 1000.0
     val speedKmh = if (elapsedTime > 0) distanceMeters / elapsedTime * 3.6 else 0.0
@@ -538,7 +607,7 @@ fun StepCounterScreen(
         lastSessionTrail.isNotEmpty() -> lastSessionTrail
         else -> generatedTrail
     }
-    
+
     val exportTrail = when {
         isSessionRunning && liveTrail.isNotEmpty() -> liveTrail
         lastSessionTrail.isNotEmpty() -> lastSessionTrail
@@ -623,6 +692,8 @@ fun StepCounterScreen(
                         lastStepCheckpoint = totalSteps
                         lastCheckpointTime = LocalDateTime.now()
 
+                        manualResumeTime = System.currentTimeMillis()
+
                         // 5. SAVE NEW DATA (Must be after Clear!)
 
 
@@ -638,11 +709,15 @@ fun StepCounterScreen(
                             resumePoint = liveTrail.last()
                         }
                         // Save last session info
+
+                        val finalDuration = elapsedTime * 1000L
+                        onTrailUpdated(liveTrail, sessionSteps, finalDuration)
+
+
                         lastSessionSteps = sessionSteps
                         lastSessionDistance = distanceKm
                         lastSessionSpeed = instantSpeedKmh
                         lastSessionTrail = liveTrail.toList()
-                        val finalDuration = elapsedTime * 1000L
                         lastSessionDuration = finalDuration // Update local state too
 
 
@@ -655,15 +730,36 @@ fun StepCounterScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            if (!isSessionRunning && resumePoint != null) {
+            if (!isSessionRunning && resumePoint !=null && totalSteps > 0) {
                 Button(
                     onClick = {
                         // A. DETERMINE HISTORY
                         // Did we just click End? Or did we restart the app?
-                        val historyTrail = if (lastSessionTrail.isNotEmpty()) lastSessionTrail else initialTrail
-                        val historySteps = if (lastSessionSteps > 0) lastSessionSteps else lastFinishedSteps
-                        val historyDuration = if (lastSessionDuration > 0) lastSessionDuration else lastFinishedDuration
+                        val historyTrail: List<TrailPoint>
+                        val historySteps: Int
+                        val historyDuration: Long
 
+                        // Priority 1: In-Memory (We just ended a session in this app instance)
+                        // We check lastSessionSteps > 0 to ensure we don't prefer an empty "ghost" session
+                        // over a valid saved session on disk.
+                        if (lastSessionTrail.isNotEmpty() && lastSessionSteps > 0) {
+                            historyTrail = lastSessionTrail
+                            historySteps = lastSessionSteps
+                            historyDuration = lastSessionDuration
+                        }
+                        // Priority 2: Disk (App restarted, loaded from Prefs)
+                        else {
+                            historyTrail = initialTrail
+                            historySteps = initialSteps // value from 'savedTrailSteps', NOT 'lastFinishedSteps'
+                            historyDuration = initialDuration
+                        }
+
+                        // B. VALIDATION GUARD (The requested feature)
+                        // If the best candidate we found has 0 steps or no path, block it.
+                        if (historySteps <= 0 || historyTrail.size < 2) {
+                            Toast.makeText(context, "Walk a few steps to get a valid trail", Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
                         // B. LOAD TRAIL
                         liveTrail = historyTrail
 
@@ -677,10 +773,11 @@ fun StepCounterScreen(
                         lastUpdatedSteps = 0
                         lastStepCheckpoint = totalSteps
                         lastCheckpointTime = LocalDateTime.now()
-
+                        manualResumeTime = System.currentTimeMillis()
                         // E. SAVE STATE IMMEDIATELY
                         onClearSavedData()
-                        onTrailUpdated(liveTrail, totalSteps, historyDuration)
+                        onTrailUpdated(liveTrail, historySteps, historyDuration)
+
 
                         // F. START WITH RESUME VALUES!
                         // This "backdates" the timer and step counter
@@ -704,6 +801,12 @@ fun StepCounterScreen(
                 Spacer(modifier = Modifier.height(16.dp))
                 Divider()
                 Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "Hold on photo to select multiple",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
 
                 Button(
                     onClick = {

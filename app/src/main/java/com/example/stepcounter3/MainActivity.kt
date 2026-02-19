@@ -35,7 +35,12 @@ import java.time.ZoneOffset
 class MainActivity : ComponentActivity() {
 
     // -------- REAL-TIME FLOWS -------- //
-    private val totalStepsFlow = MutableStateFlow(0)
+    private val totalStepsFlow by lazy {
+        val shared = getSharedPreferences("myPrefs", MODE_PRIVATE)
+        val lastSeen = shared.getInt("lastSeenSensorValue", 0)
+        val offset = shared.getInt("stepOffset", 0)
+        MutableStateFlow(lastSeen + offset)
+    }
     private val isSessionRunningFlow = MutableStateFlow(false)
     private val sessionStartTimeFlow = MutableStateFlow(0L)
     private val sessionStartStepsFlow = MutableStateFlow(0)
@@ -60,7 +65,7 @@ class MainActivity : ComponentActivity() {
             lifecycleScope.launch {
                 stepService?.totalSteps?.collect { steps ->
 
-                    // RETROACTIVE FIX:.
+                    // RETROACTIVE FIX:
                     // If the session is running, but the sensor just "woke up" (went from 0 to something),
                     // we need to update the baseline so the session doesn't start with phantom steps.
                     if (isSessionRunningFlow.value && steps > 0) {
@@ -209,6 +214,16 @@ class MainActivity : ComponentActivity() {
         if (wasRunning) {
             sessionStartTimeFlow.value = shared.getLong("sessionStartTime", 0)
             sessionStartStepsFlow.value = shared.getInt("sessionStartSteps", 0)
+
+            // 🔥 FIX: Jump-start the Service if it was supposed to be running.
+            // This ensures the sensor listener is registered immediately
+            // and the notification comes back.
+            val restoreIntent = Intent(this, StepService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(restoreIntent)
+            } else {
+                startService(restoreIntent)
+            }
         }
 
         previousTotalSteps = loadBaseline()
@@ -279,8 +294,13 @@ class MainActivity : ComponentActivity() {
                                     putString("savedTrail", "")
                                     putInt("savedTrailSteps", 0)
                                 }
-                            }
-                        )
+                            },
+                            onSyncStepBaseline = { extraSteps ->
+                                val newBaseline = sessionStartStepsFlow.value + extraSteps
+                                sessionStartStepsFlow.value = newBaseline
+
+
+                            })
                     }
 
                     composable("map") {
