@@ -122,8 +122,7 @@ class MainActivity : ComponentActivity() {
             startService(startIntent)
         }
 
-        // 🔥 FIX: Get the most accurate current total
-        // If the flow is 0 (Service hasn't replied yet), force-load from Prefs
+        // If the flow is 0 , force-load from Prefs
         var currentTotal = totalStepsFlow.value
         if (currentTotal == 0) {
             val shared = getSharedPreferences("myPrefs", MODE_PRIVATE)

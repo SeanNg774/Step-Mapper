@@ -16,16 +16,11 @@ import java.io.OutputStream
 import java.time.Duration
 import kotlin.math.*
 import android.content.Intent
+import android.util.Xml
+import org.xmlpull.v1.XmlPullParser
+import java.io.InputStream
+import java.time.LocalDateTime
 
-
-fun haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
-    val R = 6371000.0 // radius in meters
-    val dLat = Math.toRadians(lat2 - lat1)
-    val dLon = Math.toRadians(lon2 - lon1)
-    val a = sin(dLat / 2).pow(2.0) + cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLon / 2).pow(2.0)
-    val c = 2 * atan2(sqrt(a), sqrt(1 - a))
-    return R * c
-}
 
 
 @RequiresApi(Build.VERSION_CODES.O)
@@ -114,4 +109,123 @@ fun shareGpxFile(context: android.content.Context, uri: android.net.Uri) {
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
     context.startActivity(Intent.createChooser(shareIntent, "Share Route"))
+}
+
+@RequiresApi(Build.VERSION_CODES.O)
+fun parseGpxFile(inputStream: InputStream): List<TrailPoint> {
+    val points = mutableListOf<TrailPoint>()
+    val parser: XmlPullParser = Xml.newPullParser()
+
+    // 1. Create our Synthetic Timer (Starts exactly right now)
+    var fallbackTime = LocalDateTime.now()
+
+    try {
+        parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
+        parser.setInput(inputStream, null)
+
+        var eventType = parser.eventType
+        var currentLat: Double? = null
+        var currentLon: Double? = null
+        var currentParsedTime: String? = null
+
+        while (eventType != XmlPullParser.END_DOCUMENT) {
+            val name = parser.name ?: ""
+
+            when (eventType) {
+                XmlPullParser.START_TAG -> {
+                    // GPX files can use <trkpt>, <rtept>, or <wpt> depending on how they were generated
+                    if (name.equals("trkpt", ignoreCase = true) ||
+                        name.equals("rtept", ignoreCase = true) ||
+                        name.equals("wpt", ignoreCase = true)) {
+
+                        currentLat = parser.getAttributeValue(null, "lat")?.toDoubleOrNull()
+                        currentLon = parser.getAttributeValue(null, "lon")?.toDoubleOrNull()
+                        currentParsedTime = null // Reset the time string for this new point
+                    }
+                    else if (name.equals("time", ignoreCase = true)) {
+                        // If we are currently inside a point and we find a <time> tag, extract it!
+                        if (currentLat != null && currentLon != null) {
+                            currentParsedTime = parser.nextText()
+                        }
+                    }
+                }
+
+                XmlPullParser.END_TAG -> {
+                    // When we reach the closing tag of the point, bundle it all together
+                    if (name.equals("trkpt", ignoreCase = true) ||
+                        name.equals("rtept", ignoreCase = true) ||
+                        name.equals("wpt", ignoreCase = true)) {
+
+                        if (currentLat != null && currentLon != null) {
+
+                            // --- SYNTHETIC TIMESTAMP LOGIC ---
+                            val finalTime = if (!currentParsedTime.isNullOrBlank()) {
+                                try {
+                                    // Try to parse the real timestamp (Works for Strava/Garmin files)
+                                    LocalDateTime.parse(currentParsedTime, DateTimeFormatter.ISO_DATE_TIME)
+                                } catch (e: Exception) {
+                                    // The time format was weird! Fallback to synthetic time.
+                                    val tempTime = fallbackTime
+                                    fallbackTime = fallbackTime.plusSeconds(1)
+                                    tempTime
+                                }
+                            } else {
+                                // 3. NO TIME TAG FOUND! (Internet drawn route). Inject synthetic time!
+                                val tempTime = fallbackTime
+                                fallbackTime = fallbackTime.plusSeconds(1)
+                                tempTime
+                            }
+
+                            // Add the safe, time-stamped point to our array
+                            points.add(TrailPoint(currentLat, currentLon, finalTime))
+                        }
+
+                        // Clear the variables ready for the next point in the loop
+                        currentLat = null
+                        currentLon = null
+                    }
+                }
+            }
+            eventType = parser.next()
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    } finally {
+        inputStream.close()
+    }
+
+    return points
+}
+
+fun saveRouteToInternalStorage(context: Context, uri: Uri) {
+    try {
+        val inputStream = context.contentResolver.openInputStream(uri)
+        val file = File(context.filesDir, "active_route.gpx")
+        inputStream?.use { input ->
+            file.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+
+// Loads the copy instantly when the app reboots
+@RequiresApi(Build.VERSION_CODES.O)
+fun loadRouteFromInternalStorage(context: Context): List<TrailPoint> {
+    val file = File(context.filesDir, "active_route.gpx")
+    if (!file.exists()) return emptyList()
+    return try {
+        parseGpxFile(file.inputStream())
+    } catch (e: Exception) {
+        emptyList()
+    }
+}
+
+fun clearRouteFromInternalStorage(context: Context) {
+    val file = java.io.File(context.filesDir, "active_route.gpx")
+    if (file.exists()) {
+        file.delete()
+    }
 }

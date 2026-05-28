@@ -3,8 +3,11 @@ package com.example.stepcounter3
 import android.content.Context
 import android.media.ExifInterface
 import android.net.Uri
+import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
+import androidx.annotation.RequiresApi
+import androidx.documentfile.provider.DocumentFile
 import com.example.stepcounter3.TrailPoint
 import java.io.IOException
 import java.time.Duration
@@ -24,12 +27,14 @@ object PhotoTagger {
     private const val TAG = "PhotoTagger"
 
     // Formatter for EXIF standard: "yyyy:MM:dd HH:mm:ss"
+    @RequiresApi(Build.VERSION_CODES.O)
     private val EXIF_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss")
 
     /**
      * Tries to auto-tag photos based on their timestamp.
      * Returns a list of URIs that could NOT be matched or written.
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     fun tagAuto(context: Context, trail: List<TrailPoint>, uris: List<Uri>): TagResult {
         val unmatched = mutableListOf<Uri>()
         var taggedCount = 0
@@ -41,7 +46,7 @@ object PhotoTagger {
 
         for (uri in uris) {
             try {
-                // 1. Get Photo Time (Try EXIF first, then MediaStore)
+                //  Get creation time of photo
                 val photoTime = getPhotoTime(context, uri)
 
                 if (photoTime == null) {
@@ -50,15 +55,15 @@ object PhotoTagger {
                     continue
                 }
 
-                // 2. Check if time is roughly within the trail range (plus buffer)
-                // We add a 10-minute buffer to catch slight clock drifts or pre-walk photos
+                // Check if time is roughly within the trail range (plus buffer)
+                // 10-minute buffer to catch slight clock drifts or pre-walk photos
                 if (isTimeWithinRange(photoTime, trailStart, trailEnd, bufferMinutes = 10)) {
 
                     // 3. Find closest point
                     val bestPoint = findClosestPoint(trail, photoTime)
 
                     if (bestPoint != null) {
-                        // 4. WRITE EXIF (Critical: Use Read/Write Mode)
+                        // 4. WRITE EXIF
                         val success = writeExif(context, uri, bestPoint.lat, bestPoint.lon)
                         if (success) {
                             taggedCount++
@@ -100,6 +105,7 @@ object PhotoTagger {
      * 1. Try reading EXIF 'DateTimeOriginal' or 'DateTime'
      * 2. If missing (screenshots), query Android MediaStore for 'DATE_TAKEN'
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun getPhotoTime(context: Context, uri: Uri): LocalDateTime? {
         // Try EXIF first (Fastest, most accurate for Photos)
         try {
@@ -110,7 +116,7 @@ object PhotoTagger {
 
                 if (dateString != null) {
                     // Parse "yyyy:MM:dd HH:mm:ss"
-                    // Note: EXIF has no timezone, so we assume it matches the device's current wall-clock time
+                    // EXIF has no timezone, so we assume it matches the device's current wall-clock time
                     // which matches our TrailPoint.time (LocalDateTime.now)
                     return try {
                         LocalDateTime.parse(dateString, EXIF_DATE_FORMAT)
@@ -123,10 +129,27 @@ object PhotoTagger {
             Log.w(TAG, "Failed to read EXIF stream", e)
         }
 
-        // Fallback: Query MediaStore (Good for screenshots/downloaded images)
-        return getMediaStoreDate(context, uri)
+        // 2. Fallback: Document File Modification Time
+        // (Safest fallback for URIs returned by OpenMultipleDocuments)
+        try {
+            val documentFile = DocumentFile.fromSingleUri(context, uri)
+            val lastModifiedMillis = documentFile?.lastModified()
+
+            if (lastModifiedMillis != null && lastModifiedMillis > 0) {
+                return Instant.ofEpochMilli(lastModifiedMillis)
+                    .atZone(ZoneId.systemDefault())
+                    .toLocalDateTime()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to read file modification time", e)
+        }
+
+        // 3. Complete failure (Return null so it goes to your unmatchedUris list)
+        return null
     }
 
+
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun getMediaStoreDate(context: Context, uri: Uri): LocalDateTime? {
         val projection = arrayOf(MediaStore.Images.Media.DATE_TAKEN, MediaStore.Images.Media.DATE_MODIFIED)
 
@@ -158,6 +181,7 @@ object PhotoTagger {
         return null
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun isTimeWithinRange(
         time: LocalDateTime,
         start: LocalDateTime,
@@ -169,6 +193,7 @@ object PhotoTagger {
         return (time.isAfter(s) || time.isEqual(s)) && (time.isBefore(e) || time.isEqual(e))
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun findClosestPoint(trail: List<TrailPoint>, time: LocalDateTime): TrailPoint? {
         // Simple linear search (Trail is usually short enough).
         // For huge trails, binary search would be better.
@@ -183,8 +208,6 @@ object PhotoTagger {
             }
         }
 
-        // Only accept if within 5 minutes of a point (prevents matching to a point 2 hours away)
-        if (minDiffSeconds > 300) return null
 
         return bestPoint
     }

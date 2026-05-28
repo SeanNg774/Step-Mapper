@@ -15,7 +15,7 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = 1
-        versionName = "1.3.2"
+        versionName = "1.4.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -53,12 +53,13 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.9.6")
     implementation("androidx.compose.material:material-icons-extended:1.7.8")
     implementation("androidx.exifinterface:exifinterface:1.4.2")
-
+    implementation("io.coil-kt:coil-compose:2.7.0")
     implementation(platform("androidx.compose:compose-bom:2025.11.01"))
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation(libs.androidx.documentfile)
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 
