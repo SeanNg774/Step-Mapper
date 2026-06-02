@@ -21,6 +21,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import androidx.core.content.edit
 
 class StepService : Service(), SensorEventListener {
 
@@ -103,15 +104,15 @@ class StepService : Service(), SensorEventListener {
 
         if (rawSensorSteps < lastSeenSensorValue) {
             stepOffset += lastSeenSensorValue
-            getSharedPreferences("myPrefs", Context.MODE_PRIVATE).edit()
-                .putInt("stepOffset", stepOffset)
-                .apply()
+            getSharedPreferences("myPrefs", Context.MODE_PRIVATE).edit {
+                putInt("stepOffset", stepOffset)
+            }
         }
 
         lastSeenSensorValue = rawSensorSteps
-        getSharedPreferences("myPrefs", Context.MODE_PRIVATE).edit()
-            .putInt("lastSeenSensorValue", lastSeenSensorValue)
-            .apply()
+        getSharedPreferences("myPrefs", Context.MODE_PRIVATE).edit {
+            putInt("lastSeenSensorValue", lastSeenSensorValue)
+        }
 
         val adjustedTotal = rawSensorSteps + stepOffset
         _totalSteps.value = adjustedTotal

@@ -3,10 +3,8 @@ package com.example.stepcounter3
 import android.os.Build
 import androidx.annotation.RequiresApi
 import java.time.format.DateTimeFormatter
-import com.example.stepcounter3.TrailPoint
 import android.content.Context
 import android.net.Uri
-import androidx.core.content.FileProvider
 import java.io.File
 import android.content.ContentValues
 import android.os.Environment
@@ -14,7 +12,6 @@ import android.provider.MediaStore
 import android.widget.Toast
 import java.io.OutputStream
 import java.time.Duration
-import kotlin.math.*
 import android.content.Intent
 import android.util.Xml
 import org.xmlpull.v1.XmlPullParser

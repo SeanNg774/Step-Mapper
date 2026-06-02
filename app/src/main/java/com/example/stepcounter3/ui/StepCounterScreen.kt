@@ -1,10 +1,8 @@
 @file:OptIn(ExperimentalMaterial3Api::class)
+@file:Suppress("COMPOSE_APPLIER_CALL_MISMATCH")
 
 package com.example.stepcounter3.ui
 
-import RoadGraph
-import addNoiseToCoordinate
-import android.annotation.SuppressLint
 import android.os.Build
 import com.example.stepcounter3.TrailPoint
 import android.widget.Toast
@@ -29,16 +27,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.ui.graphics.Color
 import com.google.maps.android.compose.Polyline
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import com.example.stepcounter3.buildGpxXml
-import com.example.stepcounter3.extendTrail
 import com.example.stepcounter3.saveGpxToDownloads
 import com.example.stepcounter3.haversineMeters
 import java.time.Duration
-import java.time.LocalDateTime
-import java.lang.Math
-import kotlin.math.cos
-import kotlin.math.sin
 import com.example.stepcounter3.shareGpxFile
 import com.google.maps.android.compose.rememberUpdatedMarkerState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -54,27 +46,17 @@ import java.time.format.DateTimeFormatter
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.ui.Alignment
-import java.time.LocalDateTime.now
 import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.example.stepcounter3.R
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.health.connect.datatypes.ExerciseRoute
-import android.webkit.ValueCallback
-import android.webkit.WebChromeClient
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.core.content.ContextCompat
 import com.google.android.gms.maps.model.BitmapDescriptor
 import androidx.compose.ui.geometry.Offset
-import com.example.stepcounter3.calculateBearing
-import com.example.stepcounter3.clearRouteFromInternalStorage
-import com.example.stepcounter3.loadRouteFromInternalStorage
 import com.example.stepcounter3.parseGpxFile
 import com.example.stepcounter3.saveRouteToInternalStorage
 import kotlinx.coroutines.Dispatchers
@@ -85,124 +67,24 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.edit
+import com.example.stepcounter3.StepCounterViewModel
 import fetchRoadGraph
+import androidx.core.net.toUri
+import androidx.core.content.edit
+import androidx.core.graphics.createBitmap
 
 
 fun bitmapDescriptorFromVector(context: Context, vectorResId: Int): BitmapDescriptor? {
     val vectorDrawable = ContextCompat.getDrawable(context, vectorResId) ?: return null
     vectorDrawable.setBounds(0, 0, vectorDrawable.intrinsicWidth, vectorDrawable.intrinsicHeight)
-    val bitmap = Bitmap.createBitmap(
-        vectorDrawable.intrinsicWidth,
-        vectorDrawable.intrinsicHeight,
-        Bitmap.Config.ARGB_8888
-    )
+    val bitmap = createBitmap(vectorDrawable.intrinsicWidth, vectorDrawable.intrinsicHeight)
     val canvas = Canvas(bitmap)
     vectorDrawable.draw(canvas)
     return BitmapDescriptorFactory.fromBitmap(bitmap)
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@SuppressLint("SetJavaScriptEnabled")
-@Composable
-fun StravaUploadScreen(onClose: () -> Unit) {
-    // This holds the callback from the WebView waiting for the user to pick a file
-    var fileChooserCallback: ValueCallback<Array<Uri>>? = remember { null }
-
-    // Android's native file picker launcher
-    val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == android.app.Activity.RESULT_OK) {
-            val data = result.data?.data
-            if (data != null) {
-                // Pass the selected file back to the WebView!
-                fileChooserCallback?.onReceiveValue(arrayOf(data))
-            } else {
-                fileChooserCallback?.onReceiveValue(null)
-            }
-        } else {
-            // User cancelled the picker
-            fileChooserCallback?.onReceiveValue(null)
-        }
-        fileChooserCallback = null // Reset
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Strava GPX Uploader") },
-                navigationIcon = {
-                    IconButton(onClick = onClose) {
-                        Icon(Icons.Default.Close, contentDescription = "Close Strava Uploader")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            )
-        }
-    ) { paddingValues ->
-        AndroidView(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues), // Respects the Top Bar space
-            factory = { context ->
-                WebView(context).apply {
-                    // 1. Enable JavaScript (Strava requires it to load)
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-
-                    // 2. SPOOF DESKTOP CHROME (Tricks Strava into showing the PC layout)
-                    val desktopUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                    settings.userAgentString = desktopUserAgent
-
-                    // Force viewport to behave like a desktop screen
-                    settings.loadWithOverviewMode = true
-                    settings.useWideViewPort = true
-
-                    // Allow zooming since desktop sites are tiny on phones
-                    settings.setSupportZoom(true)
-                    settings.builtInZoomControls = true
-                    settings.displayZoomControls = false
-
-                    webViewClient = WebViewClient() // Keeps navigation inside the app
-
-                    // 3. INTERCEPT FILE CHOOSER
-                    webChromeClient = object : WebChromeClient() {
-                        override fun onShowFileChooser(
-                            webView: WebView?,
-                            filePathCallback: ValueCallback<Array<Uri>>?,
-                            fileChooserParams: FileChooserParams?
-                        ): Boolean {
-                            // Save the callback so we can trigger it later
-                            fileChooserCallback = filePathCallback
-
-                            // Create an intent to open the phone's file explorer
-                            val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
-                                addCategory(Intent.CATEGORY_OPENABLE)
-                                // Strava looks for GPX/FIT/TCX files
-                                type = "*/*"
-                            }
-
-                            // Launch the native picker!
-                            filePickerLauncher.launch(intent)
-                            return true
-                        }
-                    }
-
-                    // 4. Load the direct upload page!
-                    loadUrl("https://www.strava.com/upload/select")
-                }
-            }
-        )
-    }
-}
 @Composable
 fun LocationPickerScreen(
     startLat: Double,
@@ -246,7 +128,7 @@ fun LocationPickerScreen(
             cameraPositionState = cameraPositionState,
             onMapClick = { latLng -> updateFromMap(latLng) },
             properties = MapProperties(
-                mapType = currentMapType,
+                mapType =currentMapType,
                 isMyLocationEnabled = false
             ),
 
@@ -259,7 +141,7 @@ fun LocationPickerScreen(
         IconButton(
             onClick = {
                 // Cycle: Normal -> Hybrid -> Normal
-                currentMapType = if (currentMapType == MapType.NORMAL) {
+               currentMapType = if (currentMapType == MapType.NORMAL) {
                     MapType.HYBRID
                 } else {
                     MapType.NORMAL
@@ -339,7 +221,7 @@ fun LocationPickerScreen(
                 Text("Cancel")
             }
 
-            // Confirm Button (This actually saves it)
+            // Confirm Button
             Button(
                 onClick = {
                     onLocationSelected(selectedPos.latitude, selectedPos.longitude)
@@ -377,7 +259,7 @@ fun MapScreen(
         if (trail.isNotEmpty()) {
             val latestPoint = trail.last()
 
-            // 1. Get the current zoom level (so we don't reset it)
+            // 1. Get the current zoom level
             // If the map just started (zoom is near 0), default to 17f.
             // Otherwise, respect the user's current zoom.
             val currentZoom = cameraPositionState.position.zoom
@@ -403,16 +285,16 @@ fun MapScreen(
 
             if (isMapLoaded) {
                 cameraPositionState.animate(
-                    update = com.google.android.gms.maps.CameraUpdateFactory.newLatLngZoom(
-                        com.google.android.gms.maps.model.LatLng(startPoint.lat, startPoint.lon),
+                    update = CameraUpdateFactory.newLatLngZoom(
+                        LatLng(startPoint.lat, startPoint.lon),
                         18f // 18f is a nice tight zoom level
                     ),
                     durationMs = 1500 // Smooth 1.5 second panning animation
                 )
             } else {
                 cameraPositionState.position =
-                    com.google.android.gms.maps.model.CameraPosition.fromLatLngZoom(
-                        com.google.android.gms.maps.model.LatLng(startPoint.lat, startPoint.lon),
+                    CameraPosition.fromLatLngZoom(
+                        LatLng(startPoint.lat, startPoint.lon),
                         18f
                     )
             }
@@ -502,10 +384,9 @@ fun MapScreen(
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun StepCounterScreen(
+    viewModel: StepCounterViewModel,
     initialStrideLength: Double,
     onStrideLengthChanged: (Double) -> Unit,
-    lastFinishedSteps: Int,
-    lastFinishedDuration: Long,
     initialDuration: Long,
     onClearSavedData: () -> Unit,
     defaultLat: Double,
@@ -514,167 +395,83 @@ fun StepCounterScreen(
     initialTrail: List<TrailPoint>,
     onTrailUpdated: (List<TrailPoint>, Int, Long) -> Unit,
     initialSteps: Int,
-    onOpenMap: () -> Unit,
     totalStepsFlow: MutableStateFlow<Int>,
     previousTotalSteps: Float,
-    onReset: () -> Unit,
     onStartSession: (Int, Long) -> Unit,
     onEndSession: (Int, Double, Double, Long) -> Unit,
     isSessionRunningFlow: MutableStateFlow<Boolean>,
     sessionStartTimeFlow: MutableStateFlow<Long>,
     sessionStartStepsFlow: MutableStateFlow<Int>,
-    onTrailGenerated: (List<TrailPoint>) -> Unit,
     onSyncStepBaseline: (Int) -> Unit,
 
-) {
+    ) {
     val totalSteps by totalStepsFlow.collectAsState()
     val sessionStartSteps by sessionStartStepsFlow.collectAsState()
     (totalSteps - previousTotalSteps.toInt()).coerceAtLeast(0)
     val context = LocalContext.current
     val isSessionRunning by isSessionRunningFlow.collectAsState()
     val sessionStartTime by sessionStartTimeFlow.collectAsState()
-    var homeLat by remember { mutableStateOf(defaultLat) }
-    var homeLon by remember { mutableStateOf(defaultLon) }
-    var isPickingLocation by remember { mutableStateOf(false) }
-    var generatedTrail by remember { mutableStateOf<List<TrailPoint>>(emptyList()) }
-    var elapsedTime by remember { mutableStateOf(0L) }
-    var lastSessionSteps by remember { mutableStateOf(initialSteps) }
-    var lastSessionDistance by remember { mutableStateOf(initialSteps * initialStrideLength/1000.0) }
-    var lastSessionSpeed by remember { mutableStateOf(0.0) }
-    var lastSessionTrail by remember { mutableStateOf(initialTrail) }
     val routePrefs = context.getSharedPreferences("RouteSettings", Context.MODE_PRIVATE)
-    var importedRoute by remember { mutableStateOf(loadRouteFromInternalStorage(context)) }
-    var liveTrail by remember { mutableStateOf(initialTrail) }
-    var currentLat by remember {
-        mutableStateOf(initialTrail.lastOrNull()?.lat ?: homeLat)
-    }
-    var currentLon by remember {
-        mutableStateOf(initialTrail.lastOrNull()?.lon ?: homeLon)
-    }
-    var lastCheckpointTime by remember {
-        mutableStateOf(initialTrail.lastOrNull()?.time ?: now())
-    }
-    LaunchedEffect(isSessionRunning, importedRoute) {
-        // If the session is running, but RAM wiped the blue line, AND we are on a GPX route...
-        if (isSessionRunning && liveTrail.size <= 1 && importedRoute.isNotEmpty()) {
-            val savedIndex = routePrefs.getInt("savedRouteIndex", 0)
-            val sessionStart = routePrefs.getInt("sessionStartIndex", 0)
+    val coroutineScope = rememberCoroutineScope()
 
-            if (savedIndex > 0 && savedIndex >= sessionStart) {
-                val safeStart = sessionStart.coerceIn(0, importedRoute.size - 1)
-                val safeEnd = savedIndex.coerceIn(0, importedRoute.size - 1)
-
-                liveTrail = importedRoute.subList(safeStart, safeEnd + 1).map { oldPoint ->
-                    TrailPoint(oldPoint.lat, oldPoint.lon, now())}
-                currentLat = importedRoute[safeEnd].lat
-                currentLon = importedRoute[safeEnd].lon
-                lastCheckpointTime = liveTrail.lastOrNull()?.time ?: now()
-            }
-        }
+    LaunchedEffect(Unit) {
+        viewModel.initialize(
+            context = context,
+            defaultLat = defaultLat,
+            defaultLon = defaultLon,
+            initialTrail = initialTrail,
+            initialSteps = initialSteps,
+            initialDuration = initialDuration,
+            initialStride = initialStrideLength,
+            sessionStartSteps = sessionStartStepsFlow.value
+        )
     }
-    var lastUpdatedSteps by remember { mutableStateOf(0) }
-    // Revert this to the simple version
-    var lastStepCheckpoint by remember {
-        mutableStateOf(sessionStartSteps + initialSteps)
-    }
-    var walkingDirection by remember {
-        mutableStateOf(Math.random() * 360)
-    }
-    var strideLength by remember { mutableStateOf(initialStrideLength) }
-    var showStrideDialog by remember { mutableStateOf(false) }
-    var resumePoint by remember { mutableStateOf(initialTrail.lastOrNull()) }
-    var currentMapType by remember { mutableStateOf(MapType.NORMAL) }
-    var lastSessionDuration by remember {mutableStateOf(initialDuration)}
-
-    var sessionResumedTimestamp by remember { mutableStateOf(0L) }
-    var manualResumeTime by remember { mutableStateOf(0L) }
-    var isGeneratingTrail by remember { mutableStateOf(false) }
-    val coroutineScope = rememberCoroutineScope() // Needed to launch background tasks
-    var isManualTagMode by remember { mutableStateOf(false) }
-    var loopRouteBackwards by remember {
-        mutableStateOf(routePrefs.getBoolean("loopBackwards", false))
-    }
-    var routeDirection by remember {
-        mutableStateOf(routePrefs.getInt("savedRouteDirection", 1))
-    }
-    var loopRouteContinuously by remember {
-        mutableStateOf(routePrefs.getBoolean("loopContinuously", false))
-    }
-    var showUnmatchedDialog by remember { mutableStateOf(false) }
-    var unmatchedUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
-    var currentQueueIndex by remember { mutableStateOf(0) } // NEW: Tracks our place in line
-    var manualTagIndex by remember { mutableStateOf(0f) } // Float for slider
-    var showStravaWebView by remember { mutableStateOf(false) }
-    var routeTargetIndex by remember {
-        mutableStateOf(routePrefs.getInt("savedRouteIndex", 0))
-    }
-    var showRouteModeDialog by remember { mutableStateOf(false) }
-    var pendingSessionAction by remember { mutableStateOf<(() -> Unit)?>(null) }
-    var followRoadCurrentNode by remember {
-        mutableStateOf(routePrefs.getLong("followRoadCurrentNode", -1L))
-    }
-    var followRoadTargetNode by remember {
-        mutableStateOf(routePrefs.getLong("followRoadTargetNode", -1L))
-    }
-    var followRoadLastNode by remember {
-        mutableStateOf(routePrefs.getLong("followRoadLastNode", -1L))
-    }
-    var isFollowRoadMode by remember {
-        mutableStateOf(routePrefs.getBoolean("isFollowRoadMode", false))
-    }
-    var showFreeWalkModeDialog by remember { mutableStateOf(false) }
-
-    // Holds the map in RAM while walking
-    var activeRoadGraph by remember { mutableStateOf<RoadGraph?>(null) }
-    var currentLateralOffset by remember { mutableStateOf(0.0) }
-
 
 // Listen for when the session starts or resumes
     LaunchedEffect(isSessionRunning) {
         if (isSessionRunning) {
-            sessionResumedTimestamp = System.currentTimeMillis()
+            viewModel.sessionResumedTimestamp = System.currentTimeMillis()
         }
     }
-    // ... variable declarations ...
 
-    // 🔥 NEW: Sync checkpoint when sessionStartSteps loads from memory
+
+    // Sync checkpoint when sessionStartSteps loads from memory
     LaunchedEffect(sessionStartSteps, isSessionRunning) {
         // If we are resuming a running session that has no trail yet (just the start point),
         // we must align the checkpoint with the Session Start, otherwise we get a huge "lifetime" trail.
         if (isSessionRunning && initialTrail.size <= 1 && sessionStartSteps > 0) {
             // Only update if the checkpoint is currently "behind" (e.g., 0)
-            if (lastStepCheckpoint < sessionStartSteps) {
-                lastStepCheckpoint = sessionStartSteps
+            if (viewModel.lastStepCheckpoint < sessionStartSteps) {
+                viewModel.lastStepCheckpoint = sessionStartSteps
             }
         }
     }
 
-    // ... existing LaunchedEffect(totalSteps) ...
     val mapTrail =
-        if (isSessionRunning) liveTrail else lastSessionTrail
+        if (isSessionRunning) viewModel.liveTrail else viewModel.lastSessionTrail
 
-    if (isPickingLocation) {
+    if (viewModel.isPickingLocation) {
         LocationPickerScreen(
-            startLat = currentLat,
-            startLon = currentLon,
+            startLat = viewModel.currentLat,
+            startLon = viewModel.currentLon,
             onLocationSelected = { lat, lon ->
                 // Update local state
-                homeLat = lat
-                homeLon = lon
+               viewModel.homeLat = lat
+               viewModel.homeLon = lon
 
-                currentLat = lat
-                currentLon = lon
+                viewModel.currentLat = lat
+                viewModel.currentLon = lon
 
                 // Save to persistence
                 onSaveStartLocation(lat, lon)
 
                 // Close picker
-                isPickingLocation = false
+                viewModel.isPickingLocation = false
 
                 // Optional: Clear any old trail if you want a fresh start
-                // liveTrail = emptyList()
+                // viewModel.liveTrail = emptyList()
             },
-            onCancel = { isPickingLocation = false }
+            onCancel = { viewModel.isPickingLocation = false }
         )
         return // Stop rendering the rest of the UI behind the map
     }
@@ -682,22 +479,22 @@ fun StepCounterScreen(
         contract = ActivityResultContracts.OpenMultipleDocuments(),
         onResult = { uris ->
             if (uris.isNotEmpty()) {
-                if (isManualTagMode) {
-                    // BYPASS EXIF: Send everything straight to the slider
-                    unmatchedUris = uris
-                    currentQueueIndex = 0 // NEW: Reset queue
-                    showUnmatchedDialog = true
+                if (viewModel.isManualTagMode) {
+                    // Send everything straight to the slider
+                    viewModel.unmatchedUris = uris
+                    viewModel.currentQueueIndex = 0 // Reset queue
+                    viewModel.showUnmatchedDialog = true
                 } else {
-                    val trailToUse = lastSessionTrail.ifEmpty { liveTrail }
+                    val trailToUse = viewModel.lastSessionTrail.ifEmpty { viewModel.liveTrail }
 
                     // Auto-Tagging
                     val result = PhotoTagger.tagAuto(context, trailToUse, uris)
 
                     //  Handle Results
                     if (result.unmatchedUris.isNotEmpty()) {
-                        unmatchedUris = result.unmatchedUris
-                        currentQueueIndex = 0 // NEW: Reset queue
-                        showUnmatchedDialog = true
+                        viewModel.unmatchedUris = result.unmatchedUris
+                        viewModel.currentQueueIndex = 0 // NEW: Reset queue
+                        viewModel.showUnmatchedDialog = true
                         Toast.makeText(context, "${result.taggedCount} matched. ${result.unmatchedUris.size} photo(s) need manual placement.", Toast.LENGTH_SHORT).show()
                     } else if (result.taggedCount == 0) {
                         Toast.makeText(context, "No photos matched the trail time.", Toast.LENGTH_SHORT).show()
@@ -715,46 +512,46 @@ fun StepCounterScreen(
 
             if (uri != null) {
                 try {
-                    // 1. Open the file the user selected
+                    //  Open the file the user selected
                     val inputStream = context.contentResolver.openInputStream(uri)
                     if (inputStream != null) {
 
-                        // 2. Pass it to the parser we just built
+                        //  Pass it to the parser we just built
                         val parsedPoints = parseGpxFile(inputStream)
                         inputStream.close()
 
                         if (parsedPoints.isNotEmpty()) {
-                            importedRoute = parsedPoints
-                            routeTargetIndex = 0
-                            routeDirection = 1
+                            viewModel.importedRoute = parsedPoints
+                            viewModel.routeTargetIndex = 0
+                            viewModel.routeDirection = 1
 
-                            // NEW: Save it permanently to the hard drive
+                            // Save it permanently to the hard drive
                             saveRouteToInternalStorage(context, uri)
 
                         }
 
                         // 3. Save it to state and notify the user
                         if (parsedPoints.isNotEmpty()) {
-                            importedRoute = parsedPoints
-                            routeTargetIndex = 0
-                            routeDirection = 1
+                            viewModel.importedRoute = parsedPoints
+                            viewModel.routeTargetIndex = 0
+                            viewModel.routeDirection = 1
 
                             // NEW: Reset memory for the new route!
-                            routePrefs.edit()
-                                .putInt("savedRouteIndex", 0)
-                                .putInt("savedRouteDirection", 1)
-                                .putBoolean("hasSelectedRouteBehavior", false)
-                                .putBoolean("isFollowRoadMode",false)
-                                .apply()
+                            routePrefs.edit {
+                                putInt("savedRouteIndex", 0)
+                                putInt("savedRouteDirection", 1)
+                                putBoolean("hasSelectedRouteBehavior", false)
+                                putBoolean("isFollowRoadMode", false)
+                            }
 
-                            isFollowRoadMode = false // Clear Compose state
-                            activeRoadGraph = null   // Wipe the RAM map
+                            viewModel.isFollowRoadMode = false // Clear Compose state
+                            viewModel.activeRoadGraph = null   // Wipe the RAM map
 
                             Toast.makeText(context, "Success! Loaded existing trail.", Toast.LENGTH_SHORT).show()
 
                             // Optional: Instantly snap the map camera to the start of the imported route
-                            currentLat = parsedPoints.first().lat
-                            currentLon = parsedPoints.first().lon
+                            viewModel.currentLat = parsedPoints.first().lat
+                            viewModel.currentLon = parsedPoints.first().lon
                         } else {
                             Toast.makeText(context, "Could not find any GPS points in that file.", Toast.LENGTH_SHORT).show()
                         }
@@ -767,367 +564,33 @@ fun StepCounterScreen(
         }
     )
 
-    // ---> NEW: AUTONOMOUS MAP RECOVERY <---
-    // If the phone's RAM clears the graph while walking, silently re-download it!
-    LaunchedEffect(isSessionRunning, isFollowRoadMode, activeRoadGraph) {
-        if (isSessionRunning && isFollowRoadMode && activeRoadGraph == null) {
+
+    // If the phone's RAM clears the graph while walking, silently re-download it
+    LaunchedEffect(isSessionRunning, viewModel.isFollowRoadMode, viewModel.activeRoadGraph) {
+        if (isSessionRunning && viewModel.isFollowRoadMode && viewModel.activeRoadGraph == null) {
             coroutineScope.launch {
-                activeRoadGraph = fetchRoadGraph(currentLat, currentLon, 2000)
+                viewModel.activeRoadGraph = fetchRoadGraph(viewModel.currentLat, viewModel.currentLon, 2000)
             }
         }
     }
-
 
     // Tick every second while session is running
     LaunchedEffect(isSessionRunning) {
         while (isSessionRunning) {
-            elapsedTime = (System.currentTimeMillis() - sessionStartTime) / 1000
+           viewModel.elapsedTime = (System.currentTimeMillis() - sessionStartTime) / 1000
             delay(1000)
         }
     }
-    /*
-    LaunchedEffect(isSessionRunning) {
-        if (isSessionRunning) {
-            lastUpdatedSteps = 0
-            liveTrail = emptyList()
-        }
-    }
-    */
-    LaunchedEffect(totalSteps, isSessionRunning,activeRoadGraph) {
-        if (!isSessionRunning) return@LaunchedEffect
 
-
-        if (isFollowRoadMode && activeRoadGraph == null) {
-            // The app was killed and the map is currently re-downloading.
-            // Freeze the step counter so we don't accidentally wander into the bushes!
-            return@LaunchedEffect
-        }
-        // 1. SENSOR WAKE-UP GUARD (The Fix)
-        // If the checkpoint is 0 (just started) and the sensor reports real steps (e.g., 23),
-        // we assume these are pre-existing steps. Snap to them without drawing.
-        if (lastStepCheckpoint == 0 && totalSteps > 0) {
-            lastStepCheckpoint = totalSteps
-            return@LaunchedEffect
-        }
-
-        // 2. SENSOR RESET GUARD (Device reboot)
-        if (totalSteps < lastStepCheckpoint) {
-            lastStepCheckpoint = totalSteps
-            return@LaunchedEffect
-        }
-
-        if (manualResumeTime > 0 && (System.currentTimeMillis() - manualResumeTime < 3000)) {
-            val ghostSteps = totalSteps - lastStepCheckpoint
-
-            if (ghostSteps > 0) {
-                // Shift the baseline UP to hide these steps from the session total
-                onSyncStepBaseline(ghostSteps)
-            }
-            lastStepCheckpoint = totalSteps
-            return@LaunchedEffect
-        }
-
-        val sessionAge = System.currentTimeMillis() - sessionStartTime
-        if (sessionAge < 1000) {
-            lastStepCheckpoint = totalSteps
-            return@LaunchedEffect
-        }
-
-        val stepsSinceCheckpoint = totalSteps - lastStepCheckpoint
-
-
-
-        // 3. NORMAL WALKING LOGIC
-        // Only draw if we have moved enough steps AND we are past the initialization phase
-        if (stepsSinceCheckpoint >= 10) {
-
-            //  CATCH UP(App was killed/paused)
-            if (stepsSinceCheckpoint > 50) {
-                val estimatedSeconds = (stepsSinceCheckpoint * 0.6).toLong()
-                val calculatedEndTime = lastCheckpointTime.plusSeconds(estimatedSeconds)
-                val now = now()
-                val finalEndTime = if (calculatedEndTime.isAfter(now)) now else calculatedEndTime
-
-                // ---> NEW: AUTONOMOUS FAST-FORWARD SIMULATOR <---
-                if (isFollowRoadMode) {
-                    val graph = activeRoadGraph!!
-                    var simLat = currentLat
-                    var simLon = currentLon
-                    var simTime = lastCheckpointTime
-                    var simTargetId = followRoadTargetNode
-                    var simCurrentId = followRoadCurrentNode
-
-                    val fastForwardPoints = mutableListOf<TrailPoint>()
-                    var remainingDistance = stepsSinceCheckpoint * strideLength
-                    val stepDist = strideLength * 2.0 // Simulate slightly larger strides to process faster
-
-                    while (remainingDistance > 0) {
-                        val targetNode = graph.nodes[simTargetId]
-                        if (targetNode == null) break // We ran off the edge of the map!
-
-                        val distToTarget = haversineMeters(simLat, simLon, targetNode.lat, targetNode.lon)
-
-                        // Variables to hold the final drawn dot
-                        var pointToSaveLat = simLat
-                        var pointToSaveLon = simLon
-
-                        if (distToTarget <= stepDist) {
-                            simLat = targetNode.lat
-                            simLon = targetNode.lon
-                            remainingDistance -= distToTarget
-
-                            // Intersections don't get noise, keep the turns sharp!
-                            pointToSaveLat = simLat
-                            pointToSaveLon = simLon
-
-                            val connectedEdges = graph.adjacencyList[targetNode.id] ?: emptyList()
-                            val validNextEdges = if (connectedEdges.size > 1) {
-                                connectedEdges.filter { it.targetNodeId != simCurrentId }
-                            } else {
-                                connectedEdges
-                            }
-
-                            val nextEdge = validNextEdges.randomOrNull()
-                            if (nextEdge != null) {
-                                followRoadLastNode = simCurrentId
-                                simCurrentId = targetNode.id
-                                simTargetId = nextEdge.targetNodeId
-                            } else {
-                                break // Dead end with no way out
-                            }
-                        } else {
-                            val roadBearing = calculateBearing(simLat, simLon, targetNode.lat, targetNode.lon)
-                            val rad = Math.toRadians(roadBearing)
-
-                            val metersPerDegLat = 111_320.0
-                            val metersPerDegLon = 111_320.0 * kotlin.math.cos(Math.toRadians(simLat))
-
-                            // Move the true center forward
-                            simLat += (stepDist / metersPerDegLat) * kotlin.math.cos(rad)
-                            simLon += (stepDist / metersPerDegLon) * kotlin.math.sin(rad)
-                            remainingDistance -= stepDist
-
-                            // ---> ADD THE WOBBLE TO THE SIMULATOR <---
-                            val driftChange = (-100..100).random() / 100.0
-                            currentLateralOffset = (currentLateralOffset + driftChange).coerceIn(-4.0, 4.0)
-
-                            val noisyPoint = addNoiseToCoordinate(
-                                baseLat = simLat,
-                                baseLon = simLon,
-                                roadBearing = roadBearing,
-                                offsetMeters = currentLateralOffset
-                            )
-
-                            // Save the wobbly point to be drawn!
-                            pointToSaveLat = noisyPoint.lat
-                            pointToSaveLon = noisyPoint.lon
-                        }
-
-                        simTime = simTime.plusSeconds(1) // Fake time progression
-                        fastForwardPoints.add(TrailPoint(pointToSaveLat, pointToSaveLon, simTime))
-                    }
-
-                    // Finalize the fast-forward State Machine
-                    currentLat = simLat
-                    currentLon = simLon
-                    lastCheckpointTime = simTime
-                    followRoadCurrentNode = simCurrentId
-                    followRoadTargetNode = simTargetId
-
-                    routePrefs.edit()
-                        .putLong("followRoadCurrentNode", followRoadCurrentNode)
-                        .putLong("followRoadTargetNode", followRoadTargetNode)
-                        .putLong("followRoadLastNode", followRoadLastNode)
-                        .apply()
-
-                    liveTrail = liveTrail + fastForwardPoints
-                }
-                // ---> EXISTING GPX/FREE WALK CATCH-UP <---
-                else {
-                    // Generate interpolated trail points for missed steps
-                    val catchUpResult = extendTrail(
-                        startLat = currentLat,
-                        startLon = currentLon,
-                        startTime = lastCheckpointTime,
-                        steps = stepsSinceCheckpoint,
-                        stepLengthMeters = strideLength,
-                        endTime = finalEndTime,
-                        importedRoute = importedRoute,
-                        startingWaypointIndex = routeTargetIndex,
-                        loopRouteBackwards = loopRouteBackwards,
-                        loopRouteContinuously = loopRouteContinuously,
-                        initialRouteDirection = routeDirection
-                    )
-                    val missedPath = catchUpResult.first
-                    routeTargetIndex = catchUpResult.second
-                    routeDirection = catchUpResult.third
-
-                    routePrefs.edit()
-                        .putInt("savedRouteIndex", routeTargetIndex)
-                        .putInt("savedRouteDirection", routeDirection)
-                        .apply()
-
-                    liveTrail = liveTrail + missedPath
-
-                    if (missedPath.isNotEmpty()) {
-                        val last = missedPath.last()
-                        currentLat = last.lat
-                        currentLon = last.lon
-                        lastCheckpointTime = last.time
-                    }
-                }
-            }
-            // 2. NORMAL MODE.
-            else {
-                val now = now()
-                val distanceMeters = stepsSinceCheckpoint * strideLength
-
-                // ---> THE FIX: STRICT MODE SEPARATION <---
-                if (isFollowRoadMode) {
-                    if (activeRoadGraph != null) {
-                        val graph = activeRoadGraph!!
-                        val targetNode = graph.nodes[followRoadTargetNode]
-
-                        if (targetNode != null) {
-                            val distToTarget = haversineMeters(currentLat, currentLon, targetNode.lat, targetNode.lon)
-
-                            if (distToTarget <= distanceMeters.coerceAtLeast(2.0)) {
-                                // Snap to intersection
-                                currentLat = targetNode.lat
-                                currentLon = targetNode.lon
-
-                                val connectedEdges = graph.adjacencyList[targetNode.id] ?: emptyList()
-                                val validNextEdges = if (connectedEdges.size > 1) {
-                                    connectedEdges.filter { it.targetNodeId != followRoadCurrentNode }
-                                } else {
-                                    connectedEdges
-                                }
-
-                                val nextEdge = validNextEdges.randomOrNull()
-
-                                if (nextEdge != null) {
-                                    followRoadLastNode = followRoadCurrentNode
-                                    followRoadCurrentNode = targetNode.id
-                                    followRoadTargetNode = nextEdge.targetNodeId
-
-                                    routePrefs.edit()
-                                        .putLong("followRoadCurrentNode", followRoadCurrentNode)
-                                        .putLong("followRoadTargetNode", followRoadTargetNode)
-                                        .putLong("followRoadLastNode", followRoadLastNode)
-                                        .apply()
-                                }
-
-                                val newPoint = TrailPoint(currentLat, currentLon, now)
-                                liveTrail = liveTrail + newPoint
-                                lastCheckpointTime = now
-
-                            } else {
-                                // Walking down corridor
-                                // 4. WE ARE WALKING DOWN THE CORRIDOR
-                                val roadBearing = calculateBearing(currentLat, currentLon, targetNode.lat, targetNode.lon)
-                                val rad = Math.toRadians(roadBearing)
-
-                                val metersPerDegLat = 111_320.0
-                                val metersPerDegLon = 111_320.0 * kotlin.math.cos(Math.toRadians(currentLat))
-
-                                // Move the app's internal "True Center" forward
-                                currentLat += (distanceMeters / metersPerDegLat) * kotlin.math.cos(rad)
-                                currentLon += (distanceMeters / metersPerDegLon) * kotlin.math.sin(rad)
-
-                                // ---> 5. THE NOISE FILTER (FR2.4) <---
-                                // Drift left or right by up to 1.0 meter this step
-                                val driftChange = (-100..100).random() / 100.0
-
-                                // Add it to our previous position, but strictly clamp it to the +/- 4.0m requirement!
-                                currentLateralOffset = (currentLateralOffset + driftChange).coerceIn(-4.0, 4.0)
-
-                                val noisyPoint = addNoiseToCoordinate(
-                                    baseLat = currentLat,
-                                    baseLon = currentLon,
-                                    roadBearing = roadBearing,
-                                    offsetMeters = currentLateralOffset // Pass the smoothed offset
-                                )
-
-                                // Add the wobbly point to the map!
-                                liveTrail = liveTrail + noisyPoint
-                                lastCheckpointTime = now
-                            }
-                        }
-                    } else {
-                        // ---> THE FIX: GUARD CLAUSE <---
-                        // The map is currently wiped/loading. Do absolutely nothing!
-                        // This prevents the Free Walk math from taking over and causing zig-zags.
-                        return@LaunchedEffect
-                    }
-                }
-                // ---> FREE WALK AND GPX MATH <---
-                else {
-                    if (importedRoute.size > 1) {
-                        // Dynamic radius check
-                        while (routeTargetIndex >= 0 && routeTargetIndex < importedRoute.size) {
-                            val isEndPoint = (routeTargetIndex == 0 || routeTargetIndex == importedRoute.size - 1)
-                            val baseRadius = if (isEndPoint) 1.5 else 5.0
-                            val hitRadius = baseRadius.coerceAtLeast(distanceMeters).coerceAtMost(8.0)
-
-                            if (haversineMeters(currentLat, currentLon, importedRoute[routeTargetIndex].lat, importedRoute[routeTargetIndex].lon) < hitRadius) {
-                                routeTargetIndex += routeDirection
-                                routePrefs.edit()
-                                    .putInt("savedRouteIndex", routeTargetIndex)
-                                    .putInt("savedRouteDirection", routeDirection)
-                                    .apply()
-                            } else {
-                                break
-                            }
-                        }
-
-                        if (routeTargetIndex >= importedRoute.size) {
-                            if (loopRouteContinuously) {
-                                routeTargetIndex = 0
-                                routeDirection = 1
-                            } else if (loopRouteBackwards) {
-                                routeDirection = -1
-                                routeTargetIndex = (importedRoute.size - 2).coerceAtLeast(0)
-                            }
-                        } else if (routeTargetIndex < 0) {
-                            if (loopRouteContinuously) {
-                                routeTargetIndex = importedRoute.size - 1
-                                routeDirection = -1
-                            } else if (loopRouteBackwards) {
-                                routeDirection = 1
-                                routeTargetIndex = 1.coerceAtMost(importedRoute.size - 1)
-                            }
-                        }
-
-                        if (routeTargetIndex >= 0 && routeTargetIndex < importedRoute.size) {
-                            val target = importedRoute[routeTargetIndex]
-                            walkingDirection = calculateBearing(currentLat, currentLon, target.lat, target.lon)
-                            walkingDirection += (-2..2).random()
-                        } else {
-                            walkingDirection += (-10..10).random()
-                        }
-                    } else {
-                        walkingDirection += (-10..10).random()
-                    }
-
-                    val rad = Math.toRadians(walkingDirection)
-                    val metersPerDegLat = 111_320.0
-                    val metersPerDegLon = 111_320.0 * cos(Math.toRadians(currentLat))
-
-                    currentLat += (distanceMeters / metersPerDegLat) * cos(rad)
-                    currentLon += (distanceMeters / metersPerDegLon) * sin(rad)
-
-                    val newPoint = TrailPoint(currentLat, currentLon, now)
-                    liveTrail = liveTrail + newPoint
-                    lastCheckpointTime = now
-                }
-            }
-
-            // 3. SAVE STATE
-            val currentDuration = System.currentTimeMillis() - sessionStartTime
-            lastStepCheckpoint = totalSteps
-            val currentSessionSteps = totalSteps - sessionStartStepsFlow.value
-            onTrailUpdated(liveTrail, currentSessionSteps, currentDuration)
-        }
+    LaunchedEffect(totalSteps, isSessionRunning, viewModel.activeRoadGraph) {
+        viewModel.onStepTick(
+            totalSteps = totalSteps,
+            sessionStartSteps = sessionStartSteps,
+            isSessionRunning = isSessionRunning,
+            onSyncStepBaseline = onSyncStepBaseline,
+            onTrailUpdated = onTrailUpdated,
+            sessionStartTime = sessionStartTime
+        )
     }
 
 
@@ -1139,39 +602,24 @@ fun StepCounterScreen(
 
     // Calculate distance and speed
     val sessionSteps = if (isSessionRunning && totalSteps > 0) {
-        //.coerceAtLeast(0) forces it to ignore the negative math
-        // while waiting for the sensor to load.
         (totalSteps - sessionStartSteps).coerceAtLeast(0)
     } else {
         0
     }
-    val distanceMeters = sessionSteps * strideLength
+    val distanceMeters = sessionSteps *viewModel.strideLength
     val distanceKm = distanceMeters / 1000.0
-    val speedKmh = if (elapsedTime > 0) distanceMeters / elapsedTime * 3.6 else 0.0
     val averageSpeedMps = if (totalDurationSeconds > 0) distanceMeters / totalDurationSeconds else 0.0
     averageSpeedMps * 3.6
-    val instantSpeedKmh = remember(liveTrail) {
-        if (liveTrail.size < 2) 0.0
-        else {
-            val p1 = liveTrail[liveTrail.size - 2]
-            val p2 = liveTrail.last()
-
-            val dist = haversineMeters(p1.lat, p1.lon, p2.lat, p2.lon)
-            val time = Duration.between(p1.time, p2.time).seconds
-
-            if (time > 0) (dist / time) * 3.6 else 0.0
-        }
-    }
     when {
-        isSessionRunning && liveTrail.isNotEmpty() -> liveTrail
-        lastSessionTrail.isNotEmpty() -> lastSessionTrail
-        else -> generatedTrail
+        isSessionRunning && viewModel.liveTrail.isNotEmpty() -> viewModel.liveTrail
+        viewModel.lastSessionTrail.isNotEmpty() -> viewModel.lastSessionTrail
+        else -> viewModel.generatedTrail
     }
 
     val exportTrail = when {
-        isSessionRunning && liveTrail.isNotEmpty() -> liveTrail
-        lastSessionTrail.isNotEmpty() -> lastSessionTrail
-        else -> generatedTrail
+        isSessionRunning && viewModel.liveTrail.isNotEmpty() -> viewModel.liveTrail
+        viewModel.lastSessionTrail.isNotEmpty() -> viewModel.lastSessionTrail
+        else -> viewModel.generatedTrail
     }
 
 
@@ -1188,10 +636,10 @@ fun StepCounterScreen(
             if (mapTrail.isNotEmpty()) {
 
 
-                val trailToUseForPreview = if (lastSessionTrail.isNotEmpty()) lastSessionTrail else liveTrail
-                val currentPreviewPoint = if (showUnmatchedDialog && trailToUseForPreview.isNotEmpty()) {
+                val trailToUseForPreview = if (viewModel.lastSessionTrail.isNotEmpty()) viewModel.lastSessionTrail else viewModel.liveTrail
+                val currentPreviewPoint = if (viewModel.showUnmatchedDialog && trailToUseForPreview.isNotEmpty()) {
                     // Grab the exact coordinate matching the current slider index
-                    trailToUseForPreview.getOrNull(manualTagIndex.toInt())
+                    trailToUseForPreview.getOrNull(viewModel.manualTagIndex.toInt())
                 } else {
                     null
                 }
@@ -1203,15 +651,15 @@ fun StepCounterScreen(
                 ) {
                     MapScreen(
                         trail = mapTrail,
-                        mapType = currentMapType, // <--- Pass State
+                        mapType =viewModel.currentMapType, // <--- Pass State
                         onMapTypeToggle = {
                             // Toggle Logic: Normal -> Satellite -> Hybrid -> Normal
-                            currentMapType = when (currentMapType) {
+                           viewModel.currentMapType = when (viewModel.currentMapType) {
                                 MapType.NORMAL -> MapType.HYBRID
                                 else -> MapType.NORMAL
                             }
                         },
-                        importedRoute = importedRoute,
+                        importedRoute = viewModel.importedRoute,
                         previewMarkerPoint = currentPreviewPoint // LINKED
 
                     )
@@ -1219,7 +667,7 @@ fun StepCounterScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
             }
-            if (!showUnmatchedDialog) {
+            if (!viewModel.showUnmatchedDialog) {
 
 
                 //  Session info while running
@@ -1232,7 +680,7 @@ fun StepCounterScreen(
                 }
                 //  Last session info after ending
                 // Last session info after ending
-                if (!isSessionRunning && lastSessionSteps > 0) {
+                if (!isSessionRunning && viewModel.lastSessionSteps > 0) {
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         shape = MaterialTheme.shapes.medium,
@@ -1249,11 +697,11 @@ fun StepCounterScreen(
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                "Steps: $lastSessionSteps",
+                                "Steps: ${viewModel.lastSessionSteps}",
                                 style = MaterialTheme.typography.bodyLarge
                             )
                             Text(
-                                "Distance: %.3f km".format(lastSessionDistance),
+                                "Distance: %.3f km".format(viewModel.lastSessionDistance),
                                 style = MaterialTheme.typography.bodyLarge
                             )
                         }
@@ -1268,50 +716,24 @@ fun StepCounterScreen(
                         onClick = {
                             // Package all the Start logic into a reusable block
                             val startLogic: () -> Unit = {
-                                onClearSavedData()
-
-                                if (importedRoute.isNotEmpty()) {
-                                    isFollowRoadMode = false
-                                    routePrefs.edit().putBoolean("isFollowRoadMode", false).apply()
-                                }
-
-                                val newSessionStart = routeTargetIndex.coerceIn(0, importedRoute.lastIndex.coerceAtLeast(0))
-                                routePrefs.edit().putInt("sessionStartIndex", newSessionStart).apply()
-
-                                lastUpdatedSteps = 0
-                                if (importedRoute.isNotEmpty()) {
-                                    currentLat = importedRoute[newSessionStart].lat
-                                    currentLon = importedRoute[newSessionStart].lon
-                                } else if(!isFollowRoadMode){
-                                    currentLat = homeLat
-                                    currentLon = homeLon
-                                }
-
-                                val startPoint = TrailPoint(currentLat, currentLon, now())
-                                liveTrail = listOf(startPoint)
-                                onTrailUpdated(liveTrail, 0, 0L)
-
-                                lastStepCheckpoint = totalSteps
-                                lastCheckpointTime = now()
-                                manualResumeTime = System.currentTimeMillis()
-                                onStartSession(0, 0L)
+                                viewModel.startSession(
+                                    totalSteps = totalSteps,
+                                    onClearSavedData = onClearSavedData,
+                                    onTrailUpdated = onTrailUpdated,
+                                    onStartSession = onStartSession
+                                )
                             }
 
-                            // The Interceptor
                             val hasSelectedBehavior = routePrefs.getBoolean("hasSelectedRouteBehavior", false)
-
-                            if (importedRoute.isNotEmpty() && !hasSelectedBehavior) {
-                                // They have a GPX, but haven't chosen a behavior yet. Ask them!
-                                pendingSessionAction = startLogic
-                                showRouteModeDialog = true
-                            } else if (importedRoute.isEmpty()) {
-                                pendingSessionAction = startLogic
-                                showFreeWalkModeDialog = true
+                            if (viewModel.importedRoute.isNotEmpty() && !hasSelectedBehavior) {
+                                viewModel.pendingSessionAction = startLogic
+                                viewModel.showRouteModeDialog = true
+                            } else if (viewModel.importedRoute.isEmpty()) {
+                                viewModel.pendingSessionAction = startLogic
+                                viewModel.showFreeWalkModeDialog = true
                             } else {
-                                // They have a GPX AND they already chose a behavior previously. Just start!
                                 startLogic()
                             }
-
                         }
                     ) { Text("Start") }
 
@@ -1319,99 +741,17 @@ fun StepCounterScreen(
 
                     Button(
                         // Ensure button is only clickable if session is running AND we aren't already generating
-                        enabled = isSessionRunning && !isGeneratingTrail,
+                        enabled = isSessionRunning && !viewModel.isGeneratingTrail,
                         onClick = {
-                            isGeneratingTrail = true
-                            val exactEndTime = now()
-
-                            // MOVE HEAVY MATH TO BACKGROUND THREAD
-                            coroutineScope.launch(Dispatchers.Default) {
-
-                                // Calculate remaining steps using your file's specific state variables
-                                val remainingUnprocessedSteps = totalSteps - lastStepCheckpoint
-
-                                val finalPath =
-                                    if (remainingUnprocessedSteps > 0 && liveTrail.isNotEmpty()) {
-                                        val lastPoint = liveTrail.last()
-                                        extendTrail(
-                                            startLat = lastPoint.lat,
-                                            startLon = lastPoint.lon,
-                                            startTime = lastPoint.time,
-                                            endTime = exactEndTime,
-                                            steps = remainingUnprocessedSteps,
-                                            stepLengthMeters = strideLength,
-                                            importedRoute = importedRoute,
-                                            startingWaypointIndex = routeTargetIndex,
-                                            loopRouteBackwards = loopRouteBackwards,
-                                            loopRouteContinuously = loopRouteContinuously,// Add this
-                                            initialRouteDirection = routeDirection
-                                        ).first
-                                    } else {
-                                        emptyList()
-                                    }
-
-                                // SWITCH BACK TO MAIN THREAD TO UPDATE UI
-                                withContext(Dispatchers.Main) {
-                                    if (finalPath.isNotEmpty()) {
-                                        liveTrail = liveTrail + finalPath
-                                        // Update state trackers
-                                        val veryLast = liveTrail.last()
-                                        currentLat = veryLast.lat
-                                        currentLon = veryLast.lon
-                                        lastCheckpointTime = veryLast.time
-                                        lastStepCheckpoint = totalSteps
-                                    } else if (liveTrail.isNotEmpty()) {
-                                        // EDGE CASE: 0 steps taken, drop final stationary point for EXIF compatibility
-                                        val lastPoint = liveTrail.last()
-                                        liveTrail = liveTrail + TrailPoint(
-                                            lastPoint.lat,
-                                            lastPoint.lon,
-                                            exactEndTime
-                                        )
-                                        lastCheckpointTime = exactEndTime
-                                    }
-
-                                    if (liveTrail.isNotEmpty()) {
-                                        resumePoint = liveTrail.last()
-                                    }
-
-                                    // Final metric calculations based on updated trail
-                                    val finalSessionSteps =
-                                        (totalSteps - sessionStartSteps).coerceAtLeast(0)
-                                    val finalDistanceKm =
-                                        (finalSessionSteps * strideLength) / 1000.0
-                                    val finalDurationMillis = elapsedTime * 1000L
-
-                                    // Save Last Session States
-                                    onTrailUpdated(
-                                        liveTrail,
-                                        finalSessionSteps,
-                                        finalDurationMillis
-                                    )
-                                    lastSessionSteps = finalSessionSteps
-                                    lastSessionDistance = finalDistanceKm
-                                    lastSessionSpeed = instantSpeedKmh
-                                    lastSessionTrail = liveTrail.toList()
-                                    lastSessionDuration = finalDurationMillis
-
-                                    routePrefs.edit {
-                                        putInt("savedRouteIndex", routeTargetIndex)
-                                            .putInt("savedRouteDirection", routeDirection)
-                                    }
-
-                                    // Stop loading bar and trigger final callback
-                                    isGeneratingTrail = false
-                                    onEndSession(
-                                        finalSessionSteps,
-                                        finalDistanceKm,
-                                        instantSpeedKmh,
-                                        finalDurationMillis
-                                    )
-                                }
-                            }
+                            viewModel.endSession(
+                                totalSteps = totalSteps,
+                                sessionStartSteps = sessionStartSteps,
+                                onTrailUpdated = onTrailUpdated,
+                                onEndSession = onEndSession
+                            )
                         }
                     ) {
-                        if (isGeneratingTrail) {
+                        if (viewModel.isGeneratingTrail) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(20.dp),
                                 // MaterialTheme ensures it stays visible whether in dark or light mode
@@ -1434,7 +774,8 @@ fun StepCounterScreen(
 
                             // 2. Use the official Android standard for dropping a pin.
                             // Google explicitly recommends using "geo:0,0" and putting the actual coordinates in the "q" parameter.
-                            val gmmIntentUri = Uri.parse("geo:$currentLat,$currentLon?q=$currentLat,$currentLon")
+                            val gmmIntentUri =
+                                "geo:${viewModel.currentLat},${viewModel.currentLon}?q=${viewModel.currentLat},${viewModel.currentLon}".toUri()
                             val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
 
                             // 3. Launch the intent
@@ -1452,14 +793,16 @@ fun StepCounterScreen(
                         Text("Look up current location")
                     }
 
-                    if (importedRoute.isNotEmpty()) {
+
+
+                    if (viewModel.importedRoute.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedButton(
                             onClick = {
                                 // 1. Ensure we don't accidentally restart the session
-                                pendingSessionAction = null
+                                viewModel.pendingSessionAction = null
                                 // 2. Pop the dialog open!
-                                showRouteModeDialog = true
+                                viewModel.showRouteModeDialog = true
                             }
                         ) {
                             Text("Change Route Behavior")
@@ -1475,66 +818,26 @@ fun StepCounterScreen(
 
 
 
-                if (!isSessionRunning && resumePoint != null && totalSteps > 0) {
+                if (!isSessionRunning && viewModel.resumePoint != null && totalSteps > 0) {
                     Button(
                         onClick = {
-                            val resumeLogic: () -> Unit = {
-                                val historyTrail: List<TrailPoint>
-                                val historySteps: Int
-                                val historyDuration: Long
-
-                                if (lastSessionTrail.isNotEmpty() && lastSessionSteps > 0) {
-                                    historyTrail = lastSessionTrail
-                                    historySteps = lastSessionSteps
-                                    historyDuration = lastSessionDuration
-                                } else {
-                                    historyTrail = initialTrail
-                                    historySteps = initialSteps
-                                    historyDuration = initialDuration
-                                }
-
-                                // ---> THE FIX: Use an if/else instead of returning out of the lambda! <---
-                                if (historySteps <= 0 || historyTrail.size < 2) {
-                                    Toast.makeText(context, "Walk a few steps to get a valid trail", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    if (historyTrail.size <= 1 && importedRoute.isNotEmpty() && routeTargetIndex > 0) {
-                                        val sessionStart = routePrefs.getInt("sessionStartIndex", 0)
-                                        val safeStart = sessionStart.coerceIn(0, importedRoute.size - 1)
-                                        val safeEnd = routeTargetIndex.coerceIn(0, importedRoute.size - 1)
-
-                                        if (safeEnd >= safeStart) {
-                                            liveTrail = importedRoute.subList(safeStart, safeEnd + 1).map { oldPoint ->
-                                                TrailPoint(oldPoint.lat, oldPoint.lon, now())
-                                            }
-                                            currentLat = importedRoute[safeEnd].lat
-                                            currentLon = importedRoute[safeEnd].lon
-                                        }
-                                    } else {
-                                        liveTrail = historyTrail
-                                        resumePoint?.let { point ->
-                                            currentLat = point.lat
-                                            currentLon = point.lon
-                                        }
-                                    }
-
-                                    lastUpdatedSteps = 0
-                                    lastStepCheckpoint = totalSteps
-                                    lastCheckpointTime = now()
-                                    manualResumeTime = System.currentTimeMillis()
-                                    onClearSavedData()
-                                    onTrailUpdated(liveTrail, historySteps, historyDuration)
-                                    onStartSession(historySteps, historyDuration)
-                                }
-                            }
-
-                            resumeLogic()
+                            viewModel.resumeSession(
+                                totalSteps = totalSteps,
+                                initialTrail = initialTrail,
+                                initialSteps = initialSteps,
+                                initialDuration = initialDuration,
+                                onClearSavedData = onClearSavedData,
+                                onTrailUpdated = onTrailUpdated,
+                                onStartSession = onStartSession,
+                                onShowToast = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
+                            )
                         }
                     ) { Text(" Resume from Last Trail") }
                     Spacer(modifier = Modifier.height(8.dp))
                 }
                 if (!isSessionRunning) {
                     Button(
-                        onClick = { isPickingLocation = true }
+                        onClick = { viewModel.isPickingLocation = true }
                     ) {
                         Text(" Set Start Location")
                     }
@@ -1558,36 +861,11 @@ fun StepCounterScreen(
                         }
 
                         // Button 2: Only show if a route is currently active
-                        if (importedRoute.isNotEmpty()) {
+                        if (viewModel.importedRoute.isNotEmpty()) {
                             OutlinedButton(
                                 onClick = {
                                     // 1. Wipe the UI state
-                                    importedRoute = emptyList()
-                                    routeTargetIndex = 0
-
-                                    loopRouteBackwards = false
-                                    loopRouteContinuously = false
-
-                                    routePrefs.edit {
-                                        putBoolean("loopBackwards", false)
-                                        putBoolean("loopContinuously", false)
-                                        putBoolean("hasSelectedRouteBehavior", false)
-                                        putBoolean("isFollowRoadMode", false)
-                                        putInt("savedRouteIndex", 0) // NEW: Wipe saved progress
-                                        putInt("savedRouteDirection", 1) // NEW: Wipe saved direction
-                                        putLong("followRoadCurrentNode", -1L)
-                                        putLong("followRoadTargetNode", -1L)
-                                        putLong("followRoadLastNode", -1L)
-                                    }
-                                    followRoadCurrentNode = -1L
-                                    followRoadTargetNode = -1L
-                                    followRoadLastNode = -1L
-                                    isFollowRoadMode = false // Clear Compose state
-                                    activeRoadGraph = null // Wipe the map from RAM
-
-                                    // 2. Wipe the hard drive cache
-                                    clearRouteFromInternalStorage(context)
-
+                                    viewModel.clearRoute(context)
                                     Toast.makeText(context, "Route cleared!", Toast.LENGTH_SHORT).show()
                                 },
                                 modifier = Modifier.weight(1f),
@@ -1601,9 +879,9 @@ fun StepCounterScreen(
                 }
 
 
-                if (!isSessionRunning && (lastSessionTrail.isNotEmpty() || initialTrail.isNotEmpty())) {
+                if (!isSessionRunning && (viewModel.lastSessionTrail.isNotEmpty() || initialTrail.isNotEmpty())) {
 
-                    Divider()
+                    HorizontalDivider()
                     Spacer(modifier = Modifier.height(16.dp))
 
                     Text(
@@ -1618,7 +896,7 @@ fun StepCounterScreen(
                     ) {
                         Button(
                             onClick = {
-                                isManualTagMode = false // Use EXIF
+                                viewModel.isManualTagMode = false // Use EXIF
                                 photoPickerLauncher.launch(arrayOf("image/*"))
                             },
                             modifier = Modifier.weight(1f)
@@ -1628,7 +906,7 @@ fun StepCounterScreen(
 
                         Button(
                             onClick = {
-                                isManualTagMode = true // Bypass EXIF, go straight to slider
+                                viewModel.isManualTagMode = true // Bypass EXIF, go straight to slider
                                 photoPickerLauncher.launch(arrayOf("image/*"))
                             },
                             modifier = Modifier.weight(1f)
@@ -1658,8 +936,6 @@ fun StepCounterScreen(
                                     shareGpxFile(context, savedUri)
                                 }
 
-                            } else {
-
                             }
 
                         }
@@ -1681,7 +957,8 @@ fun StepCounterScreen(
                                 return@Button
                             }
 
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.strava.com/upload/select"))
+                            val intent = Intent(Intent.ACTION_VIEW,
+                                "https://www.strava.com/upload/select".toUri())
                             context.startActivity(intent)
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = androidx.compose.ui.graphics.Color(0xFFFC4C02))
@@ -1693,17 +970,17 @@ fun StepCounterScreen(
 
                 if (!isSessionRunning) {
                     Button(
-                        onClick = { showStrideDialog = true }
+                        onClick = { viewModel.showStrideDialog = true }
                     ) {
                         Text("Set Stride Length (default =0.7m)")
                     }
 
                 }
-                if (showStrideDialog) {
-                    var textValue by remember { mutableStateOf(strideLength.toString()) }
+                if (viewModel.showStrideDialog) {
+                    var textValue by remember { mutableStateOf(viewModel.strideLength.toString()) }
 
                     AlertDialog(
-                        onDismissRequest = { showStrideDialog = false },
+                        onDismissRequest = { viewModel.showStrideDialog = false },
                         title = { Text("Enter Stride Length (in meters)") },
                         text = {
                             Column {
@@ -1721,9 +998,9 @@ fun StepCounterScreen(
                                 onClick = {
                                     val newValue = textValue.toDoubleOrNull()
                                     if (newValue != null && newValue > 0.1 && newValue < 3.0) {
-                                        strideLength = newValue
+                                       viewModel.strideLength = newValue
                                         onStrideLengthChanged(newValue) // Save to Prefs
-                                        showStrideDialog = false
+                                        viewModel.showStrideDialog = false
                                     } else {
                                         Toast.makeText(
                                             context,
@@ -1737,7 +1014,7 @@ fun StepCounterScreen(
                             }
                         },
                         dismissButton = {
-                            TextButton(onClick = { showStrideDialog = false }) { Text("Cancel") }
+                            TextButton(onClick = { viewModel.showStrideDialog = false }) { Text("Cancel") }
                         }
                     )
                 }
@@ -1745,16 +1022,16 @@ fun StepCounterScreen(
 
             // --- FR6.2 PROMPT DIALOG ---
             // --- FR6.2 PROMPT DIALOG ---
-            if (showUnmatchedDialog && unmatchedUris.isNotEmpty()) {
-                val trailToUse = if (lastSessionTrail.isNotEmpty()) lastSessionTrail else liveTrail
+            if (viewModel.showUnmatchedDialog && viewModel.unmatchedUris.isNotEmpty()) {
+                val trailToUse = if (viewModel.lastSessionTrail.isNotEmpty()) viewModel.lastSessionTrail else viewModel.liveTrail
                 val maxIndex = (trailToUse.size - 1).coerceAtLeast(0).toFloat()
 
                 // NEW: Get the exact photo we are currently tagging
-                val currentPhotoUri = unmatchedUris.getOrNull(currentQueueIndex)
-                val isLastPhoto = currentQueueIndex == unmatchedUris.size - 1
+                val currentPhotoUri = viewModel.unmatchedUris.getOrNull(viewModel.currentQueueIndex)
+                val isLastPhoto = viewModel.currentQueueIndex == viewModel.unmatchedUris.size - 1
 
                 // Helper to format time for the slider label
-                val previewPoint = trailToUse.getOrNull(manualTagIndex.toInt())
+                val previewPoint = trailToUse.getOrNull(viewModel.manualTagIndex.toInt())
                 val timeLabel = previewPoint?.time?.format(DateTimeFormatter.ofPattern("HH:mm:ss")) ?: "--:--"
 
                 @OptIn(ExperimentalMaterial3Api::class)
@@ -1762,8 +1039,8 @@ fun StepCounterScreen(
 
                 ModalBottomSheet(
                     onDismissRequest = {
-                        showUnmatchedDialog = false
-                        unmatchedUris = emptyList() // Clear memory on dismiss
+                        viewModel.showUnmatchedDialog = false
+                        viewModel.unmatchedUris = emptyList() // Clear memory on dismiss
                     },
                     sheetState = sheetState,
                     scrimColor = Color.Transparent
@@ -1789,8 +1066,8 @@ fun StepCounterScreen(
 
                         // SLIDER to scrub through the walk
                         Slider(
-                            value = manualTagIndex,
-                            onValueChange = { manualTagIndex = it },
+                            value = viewModel.manualTagIndex,
+                            onValueChange = { viewModel.manualTagIndex = it },
                             valueRange = 0f..maxIndex,
                             steps = 0
                         )
@@ -1818,11 +1095,11 @@ fun StepCounterScreen(
                             OutlinedButton(
                                 onClick = {
                                     if (isLastPhoto) {
-                                        showUnmatchedDialog = false
-                                        unmatchedUris = emptyList()
+                                        viewModel.showUnmatchedDialog = false
+                                        viewModel.unmatchedUris = emptyList()
                                         Toast.makeText(context, "Finished tagging session", Toast.LENGTH_SHORT).show()
                                     } else {
-                                        currentQueueIndex++ // Instantly loads next photo
+                                        viewModel.currentQueueIndex++ // Instantly loads next photo
                                     }
                                 },
                                 modifier = Modifier.weight(1f)
@@ -1834,19 +1111,19 @@ fun StepCounterScreen(
                             Button(
                                 onClick = {
                                     // 1. Tag ONLY the current photo in the queue
-                                    val targetPoint = trailToUse.getOrElse(manualTagIndex.toInt()) { trailToUse.last() }
+                                    val targetPoint = trailToUse.getOrElse(viewModel.manualTagIndex.toInt()) { trailToUse.last() }
                                     currentPhotoUri?.let { uri ->
                                         PhotoTagger.tagManual(context, listOf(uri), targetPoint)
                                     }
 
                                     // 2. Cycle the Queue!
                                     if (isLastPhoto) {
-                                        showUnmatchedDialog = false
-                                        unmatchedUris = emptyList()
+                                        viewModel.showUnmatchedDialog = false
+                                        viewModel.unmatchedUris = emptyList()
                                         Toast.makeText(context, "All photos placed!", Toast.LENGTH_SHORT).show()
                                     } else {
-                                        currentQueueIndex++ // Instantly loads next photo
-                                        Toast.makeText(context, "Tagged photo ${currentQueueIndex}", Toast.LENGTH_SHORT).show()
+                                        viewModel.currentQueueIndex++ // Instantly loads next photo
+                                        Toast.makeText(context, "Tagged photo ${viewModel.currentQueueIndex}", Toast.LENGTH_SHORT).show()
                                     }
                                 },
                                 modifier = Modifier.weight(1f)
@@ -1861,12 +1138,12 @@ fun StepCounterScreen(
                 }
             }
     }
-        if (showFreeWalkModeDialog) {
+        if (viewModel.showFreeWalkModeDialog) {
         AlertDialog(
             onDismissRequest = {
-                if (!isGeneratingTrail) { // Prevent dismissing while map is downloading
-                    showFreeWalkModeDialog = false
-                    pendingSessionAction = null
+                if (!viewModel.isGeneratingTrail) { // Prevent dismissing while map is downloading
+                    viewModel.showFreeWalkModeDialog = false
+                    viewModel.pendingSessionAction = null
                 }
             },
             title = { Text("Choose Walk Mode") },
@@ -1878,15 +1155,15 @@ fun StepCounterScreen(
                     // Option 1: Normal Free Walk
                     Button(
                         onClick = {
-                            isFollowRoadMode = false
-                            routePrefs.edit().putBoolean("isFollowRoadMode", false).apply()
+                            viewModel.isFollowRoadMode = false
+                            routePrefs.edit { putBoolean("isFollowRoadMode", false) }
 
-                            showFreeWalkModeDialog = false
-                            pendingSessionAction?.invoke()
-                            pendingSessionAction = null
+                            viewModel.showFreeWalkModeDialog = false
+                            viewModel.pendingSessionAction?.invoke()
+                            viewModel.pendingSessionAction = null
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !isGeneratingTrail
+                        enabled = !viewModel.isGeneratingTrail
                     ) {
                         Text("Random walk")
                     }
@@ -1896,60 +1173,60 @@ fun StepCounterScreen(
                     // Option 2: Autonomous Follow Roads
                     Button(
                         onClick = {
-                            isGeneratingTrail = true
+                            viewModel.isGeneratingTrail = true
 
                             coroutineScope.launch {
                                 val downloadedGraph = fetchRoadGraph(
-                                    centerLat = currentLat,
-                                    centerLon = currentLon,
+                                    centerLat = viewModel.currentLat,
+                                    centerLon = viewModel.currentLon,
                                     radiusMeters = 2000
                                 )
 
-                                val startIntersection = downloadedGraph.getClosestNode(currentLat, currentLon)
+                                val startIntersection = downloadedGraph.getClosestNode(viewModel.currentLat, viewModel.currentLon)
 
                                 if (startIntersection != null) {
                                     val connectedRoads = downloadedGraph.adjacencyList[startIntersection.id]
                                     val firstTarget = connectedRoads?.randomOrNull()?.targetNodeId ?: -1L
 
-                                    followRoadCurrentNode = startIntersection.id
-                                    followRoadTargetNode = firstTarget
-                                    followRoadLastNode = -1L
+                                    viewModel.followRoadCurrentNode = startIntersection.id
+                                    viewModel.followRoadTargetNode = firstTarget
+                                    viewModel.followRoadLastNode = -1L
 
-                                    routePrefs.edit()
-                                        .putBoolean("isFollowRoadMode", true)
-                                        .putLong("followRoadCurrentNode", startIntersection.id)
-                                        .putLong("followRoadTargetNode", firstTarget)
-                                        .putLong("followRoadLastNode", -1L)
-                                        .apply()
+                                    routePrefs.edit {
+                                        putBoolean("isFollowRoadMode", true)
+                                        putLong("followRoadCurrentNode", startIntersection.id)
+                                            .putLong("followRoadTargetNode", firstTarget)
+                                            .putLong("followRoadLastNode", -1L)
+                                    }
 
-                                    isFollowRoadMode = true
+                                    viewModel.isFollowRoadMode = true
 
                                     // SNAP the starting GPS coordinates perfectly to the intersection!
-                                    currentLat = startIntersection.lat
-                                    currentLon = startIntersection.lon
+                                    viewModel.currentLat = startIntersection.lat
+                                    viewModel.currentLon = startIntersection.lon
 
-                                    activeRoadGraph = downloadedGraph
+                                    viewModel.activeRoadGraph = downloadedGraph
 
-                                    isGeneratingTrail = false
-                                    showFreeWalkModeDialog = false
-                                    pendingSessionAction?.invoke()
-                                    pendingSessionAction = null
+                                    viewModel.isGeneratingTrail = false
+                                    viewModel.showFreeWalkModeDialog = false
+                                    viewModel.pendingSessionAction?.invoke()
+                                    viewModel.pendingSessionAction = null
                                 } else {
                                     withContext(Dispatchers.Main) {
-                                        isGeneratingTrail = false
+                                        viewModel.isGeneratingTrail = false
                                         Toast.makeText(context, "No roads found! Defaulting to Free Walk.", Toast.LENGTH_LONG).show()
-                                        isFollowRoadMode = false
-                                        showFreeWalkModeDialog = false
-                                        pendingSessionAction?.invoke()
-                                        pendingSessionAction = null
+                                        viewModel.isFollowRoadMode = false
+                                        viewModel.showFreeWalkModeDialog = false
+                                        viewModel.pendingSessionAction?.invoke()
+                                        viewModel.pendingSessionAction = null
                                     }
                                 }
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !isGeneratingTrail
+                        enabled = !viewModel.isGeneratingTrail
                     ) {
-                        if (isGeneratingTrail) {
+                        if (viewModel.isGeneratingTrail) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Downloading Map...")
@@ -1962,18 +1239,18 @@ fun StepCounterScreen(
             confirmButton = {},
             dismissButton = {
                 TextButton(onClick = {
-                    showFreeWalkModeDialog = false
-                    pendingSessionAction = null
-                }, enabled = !isGeneratingTrail) { Text("Cancel") }
+                    viewModel.showFreeWalkModeDialog = false
+                    viewModel.pendingSessionAction = null
+                }, enabled = !viewModel.isGeneratingTrail) { Text("Cancel") }
             }
         )
     }
-        if (showRouteModeDialog) {
+        if (viewModel.showRouteModeDialog) {
 
-            val isValidCircuit = remember(importedRoute) {
-                if (importedRoute.isNotEmpty()) {
-                    val startPoint = importedRoute.first()
-                    val endPoint = importedRoute.last()
+            val isValidCircuit = remember(viewModel.importedRoute) {
+                if (viewModel.importedRoute.isNotEmpty()) {
+                    val startPoint = viewModel.importedRoute.first()
+                    val endPoint = viewModel.importedRoute.last()
                     val gap = haversineMeters(startPoint.lat, startPoint.lon, endPoint.lat, endPoint.lon)
                     gap <= 30.0 // True if the gap is 50 meters or less
                 } else {
@@ -1983,8 +1260,8 @@ fun StepCounterScreen(
 
             AlertDialog(
                 onDismissRequest = {
-                    showRouteModeDialog = false
-                    pendingSessionAction = null
+                    viewModel.showRouteModeDialog = false
+                    viewModel.pendingSessionAction = null
                 },
                 title = { Text("Route End Behavior") },
                 text = {
@@ -1995,16 +1272,16 @@ fun StepCounterScreen(
                         // Option 1: Random
                         Button(
                             onClick = {
-                                loopRouteBackwards = false
-                                loopRouteContinuously = false
-                                routePrefs.edit()
-                                    .putBoolean("loopBackwards", false)
-                                    .putBoolean("loopContinuously", false)
-                                    .putBoolean("hasSelectedRouteBehavior",true)
-                                    .apply()
-                                showRouteModeDialog = false
-                                pendingSessionAction?.invoke() // Execute the Start/Resume!
-                                pendingSessionAction = null
+                                viewModel.loopRouteBackwards = false
+                                viewModel.loopRouteContinuously = false
+                                routePrefs.edit {
+                                    putBoolean("loopBackwards", false)
+                                    putBoolean("loopContinuously", false)
+                                    putBoolean("hasSelectedRouteBehavior", true)
+                                }
+                                viewModel.showRouteModeDialog = false
+                                viewModel.pendingSessionAction?.invoke() // Execute the Start/Resume!
+                                viewModel.pendingSessionAction = null
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) { Text("Generate trail randomly") }
@@ -2014,16 +1291,16 @@ fun StepCounterScreen(
                         // Option 2: Patrol
                         Button(
                             onClick = {
-                                loopRouteBackwards = true
-                                loopRouteContinuously = false
-                                routePrefs.edit()
-                                    .putBoolean("loopBackwards", true)
-                                    .putBoolean("loopContinuously", false)
-                                    .putBoolean("hasSelectedRouteBehavior",true)
-                                    .apply()
-                                showRouteModeDialog = false
-                                pendingSessionAction?.invoke()
-                                pendingSessionAction = null
+                                viewModel.loopRouteBackwards = true
+                                viewModel.loopRouteContinuously = false
+                                routePrefs.edit {
+                                    putBoolean("loopBackwards", true)
+                                    putBoolean("loopContinuously", false)
+                                    putBoolean("hasSelectedRouteBehavior", true)
+                                }
+                                viewModel.showRouteModeDialog = false
+                                viewModel.pendingSessionAction?.invoke()
+                                viewModel.pendingSessionAction = null
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) { Text("Turn around and walk back ") }
@@ -2033,17 +1310,17 @@ fun StepCounterScreen(
                         // Option 3: Circuit
                         Button(
                             onClick = {
-                                loopRouteBackwards = false
-                                loopRouteContinuously = true
+                                viewModel.loopRouteBackwards = false
+                                viewModel.loopRouteContinuously = true
 
-                                routePrefs.edit()
-                                    .putBoolean("loopBackwards", false)
-                                    .putBoolean("loopContinuously", true)
-                                    .putBoolean("hasSelectedRouteBehavior", true)
-                                    .apply()
-                                showRouteModeDialog = false
-                                pendingSessionAction?.invoke()
-                                pendingSessionAction = null
+                                routePrefs.edit {
+                                    putBoolean("loopBackwards", false)
+                                    putBoolean("loopContinuously", true)
+                                    putBoolean("hasSelectedRouteBehavior", true)
+                                }
+                                viewModel.showRouteModeDialog = false
+                                viewModel.pendingSessionAction?.invoke()
+                                viewModel.pendingSessionAction = null
                             },
                             modifier = Modifier.fillMaxWidth(),
                             enabled = isValidCircuit
@@ -2060,8 +1337,8 @@ fun StepCounterScreen(
                 confirmButton = {}, // Leaving this blank because our options act as the confirm buttons
                 dismissButton = {
                     TextButton(onClick = {
-                        showRouteModeDialog = false
-                        pendingSessionAction = null
+                        viewModel.showRouteModeDialog = false
+                        viewModel.pendingSessionAction = null
                     }) { Text("Cancel") }
                 }
             )

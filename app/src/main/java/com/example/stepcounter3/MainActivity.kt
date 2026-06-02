@@ -18,6 +18,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
@@ -31,7 +32,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import java.time.LocalDateTime
 import java.time.ZoneOffset
-
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 class MainActivity : ComponentActivity() {
 
     // -------- REAL-TIME FLOWS -------- //
@@ -201,8 +204,6 @@ class MainActivity : ComponentActivity() {
         val initialTrail = stringToTrail(savedTrailString)
         val savedTrailSteps = shared.getInt("savedTrailSteps", 0)
         val savedTrailDuration = shared.getLong("savedTrailDuration", 0L)
-        val lastFinishedSteps = shared.getInt("sessionSteps", 0)
-        val lastFinishedDuration = shared.getLong("sessionDuration", 0L)
 
         isSessionRunningFlow.value = wasRunning
 
@@ -214,15 +215,10 @@ class MainActivity : ComponentActivity() {
             sessionStartTimeFlow.value = shared.getLong("sessionStartTime", 0)
             sessionStartStepsFlow.value = shared.getInt("sessionStartSteps", 0)
 
-            // 🔥 FIX: Jump-start the Service if it was supposed to be running.
-            // This ensures the sensor listener is registered immediately
-            // and the notification comes back.
+            //  Jump-start the Service if it was supposed to be running.
+            // This ensures the sensor listener is registered immediately and the notification comes back.
             val restoreIntent = Intent(this, StepService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(restoreIntent)
-            } else {
-                startService(restoreIntent)
-            }
+            startForegroundService(restoreIntent)
         }
 
         previousTotalSteps = loadBaseline()
@@ -231,7 +227,9 @@ class MainActivity : ComponentActivity() {
         val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED) {
-            permissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                permissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+            }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -241,15 +239,26 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MaterialTheme {
-                val navController = rememberNavController()
 
+                val navController = rememberNavController()
+                val context = LocalContext.current
+                val routePrefs = context.getSharedPreferences("RouteSettings", Context.MODE_PRIVATE)
+
+                // Create a tiny factory to build your ViewModel with the routePrefs
+                val viewModelFactory = object : ViewModelProvider.Factory {
+                    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                        return StepCounterViewModel(routePrefs) as T
+                    }
+                }
+
+                // Ask Android to remember this ViewModel across screen rotations!
+                val stepCounterViewModel: StepCounterViewModel = viewModel(factory = viewModelFactory)
                 NavHost(navController, startDestination = "stepCounter") {
 
                     composable("stepCounter") {
                         StepCounterScreen(
+                            viewModel = stepCounterViewModel,
                             initialStrideLength = savedStrideLength,
-                            lastFinishedSteps = lastFinishedSteps,
-                            lastFinishedDuration = lastFinishedDuration,
                             initialDuration = savedTrailDuration,
                             initialTrail = initialTrail,
                             initialSteps = savedTrailSteps,
@@ -267,10 +276,6 @@ class MainActivity : ComponentActivity() {
                             },
                             totalStepsFlow = totalStepsFlow,
                             previousTotalSteps = previousTotalSteps,
-                            onReset = {
-                                previousTotalSteps = totalStepsFlow.value.toFloat()
-                                saveBaseline(previousTotalSteps)
-                            },
                             onStartSession = { resumeSteps, resumeDuration ->
                                 startSession(resumeSteps, resumeDuration)
                             },
@@ -283,10 +288,6 @@ class MainActivity : ComponentActivity() {
                             sessionStartStepsFlow = sessionStartStepsFlow,
                             onStrideLengthChanged = { newLength ->
                                 shared.edit { putFloat("strideLength", newLength.toFloat()) }
-                            },
-                            onOpenMap = { navController.navigate("map") },
-                            onTrailGenerated = { trail ->
-                                trailState.value = trail
                             },
                             onClearSavedData = {
                                 shared.edit {

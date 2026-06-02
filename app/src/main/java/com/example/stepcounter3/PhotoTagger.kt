@@ -1,14 +1,12 @@
 package com.example.stepcounter3
 
 import android.content.Context
-import android.media.ExifInterface
+import androidx.exifinterface.media.ExifInterface
 import android.net.Uri
 import android.os.Build
-import android.provider.MediaStore
 import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.documentfile.provider.DocumentFile
-import com.example.stepcounter3.TrailPoint
 import java.io.IOException
 import java.time.Duration
 import java.time.Instant
@@ -148,39 +146,6 @@ object PhotoTagger {
         return null
     }
 
-
-    @RequiresApi(Build.VERSION_CODES.O)
-    private fun getMediaStoreDate(context: Context, uri: Uri): LocalDateTime? {
-        val projection = arrayOf(MediaStore.Images.Media.DATE_TAKEN, MediaStore.Images.Media.DATE_MODIFIED)
-
-        try {
-            context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    // Try DATE_TAKEN (millis since epoch)
-                    val dateTakenIdx = cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
-                    if (dateTakenIdx != -1) {
-                        val millis = cursor.getLong(dateTakenIdx)
-                        if (millis > 0) {
-                            return LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneId.systemDefault())
-                        }
-                    }
-
-                    // Fallback to DATE_MODIFIED (seconds since epoch)
-                    val dateModIdx = cursor.getColumnIndex(MediaStore.Images.Media.DATE_MODIFIED)
-                    if (dateModIdx != -1) {
-                        val seconds = cursor.getLong(dateModIdx)
-                        if (seconds > 0) {
-                            return LocalDateTime.ofInstant(Instant.ofEpochSecond(seconds), ZoneId.systemDefault())
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "MediaStore query failed", e)
-        }
-        return null
-    }
-
     @RequiresApi(Build.VERSION_CODES.O)
     private fun isTimeWithinRange(
         time: LocalDateTime,
@@ -212,9 +177,6 @@ object PhotoTagger {
         return bestPoint
     }
 
-    /**
-     * CRITICAL FIX: Uses "rw" mode to ensure we can WRITE to the file.
-     */
     private fun writeExif(context: Context, uri: Uri, lat: Double, lon: Double): Boolean {
         try {
             // Open in Read-Write mode ("rw")

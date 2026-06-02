@@ -4,11 +4,8 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 import java.time.Duration
 import kotlin.math.*
-import android.util.Xml
-import org.xmlpull.v1.XmlPullParser
-import java.io.InputStream
 import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
+
 
 
 data class TrailPoint(
@@ -29,7 +26,7 @@ fun extendTrail(
     stepLengthMeters: Double,
     importedRoute: List<TrailPoint> = emptyList(),
     startingWaypointIndex:Int = 0,
-    loopRouteBackwards: Boolean = false, // NEW
+    loopRouteBackwards: Boolean = false,
     loopRouteContinuously: Boolean = false,
     initialRouteDirection: Int = 1
 ): Triple<List<TrailPoint>, Int, Int > {
