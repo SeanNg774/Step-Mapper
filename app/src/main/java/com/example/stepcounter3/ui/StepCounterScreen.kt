@@ -2,6 +2,8 @@
 
 package com.example.stepcounter3.ui
 
+import RoadGraph
+import addNoiseToCoordinate
 import android.annotation.SuppressLint
 import android.os.Build
 import com.example.stepcounter3.TrailPoint
@@ -88,6 +90,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.edit
+import fetchRoadGraph
 
 
 fun bitmapDescriptorFromVector(context: Context, vectorResId: Int): BitmapDescriptor? {
@@ -607,6 +610,24 @@ fun StepCounterScreen(
     }
     var showRouteModeDialog by remember { mutableStateOf(false) }
     var pendingSessionAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var followRoadCurrentNode by remember {
+        mutableStateOf(routePrefs.getLong("followRoadCurrentNode", -1L))
+    }
+    var followRoadTargetNode by remember {
+        mutableStateOf(routePrefs.getLong("followRoadTargetNode", -1L))
+    }
+    var followRoadLastNode by remember {
+        mutableStateOf(routePrefs.getLong("followRoadLastNode", -1L))
+    }
+    var isFollowRoadMode by remember {
+        mutableStateOf(routePrefs.getBoolean("isFollowRoadMode", false))
+    }
+    var showFreeWalkModeDialog by remember { mutableStateOf(false) }
+
+    // Holds the map in RAM while walking
+    var activeRoadGraph by remember { mutableStateOf<RoadGraph?>(null) }
+    var currentLateralOffset by remember { mutableStateOf(0.0) }
+
 
 // Listen for when the session starts or resumes
     LaunchedEffect(isSessionRunning) {
@@ -723,7 +744,11 @@ fun StepCounterScreen(
                                 .putInt("savedRouteIndex", 0)
                                 .putInt("savedRouteDirection", 1)
                                 .putBoolean("hasSelectedRouteBehavior", false)
+                                .putBoolean("isFollowRoadMode",false)
                                 .apply()
+
+                            isFollowRoadMode = false // Clear Compose state
+                            activeRoadGraph = null   // Wipe the RAM map
 
                             Toast.makeText(context, "Success! Loaded existing trail.", Toast.LENGTH_SHORT).show()
 
@@ -742,6 +767,16 @@ fun StepCounterScreen(
         }
     )
 
+    // ---> NEW: AUTONOMOUS MAP RECOVERY <---
+    // If the phone's RAM clears the graph while walking, silently re-download it!
+    LaunchedEffect(isSessionRunning, isFollowRoadMode, activeRoadGraph) {
+        if (isSessionRunning && isFollowRoadMode && activeRoadGraph == null) {
+            coroutineScope.launch {
+                activeRoadGraph = fetchRoadGraph(currentLat, currentLon, 2000)
+            }
+        }
+    }
+
 
     // Tick every second while session is running
     LaunchedEffect(isSessionRunning) {
@@ -758,9 +793,15 @@ fun StepCounterScreen(
         }
     }
     */
-    LaunchedEffect(totalSteps, isSessionRunning) {
+    LaunchedEffect(totalSteps, isSessionRunning,activeRoadGraph) {
         if (!isSessionRunning) return@LaunchedEffect
 
+
+        if (isFollowRoadMode && activeRoadGraph == null) {
+            // The app was killed and the map is currently re-downloading.
+            // Freeze the step counter so we don't accidentally wander into the bushes!
+            return@LaunchedEffect
+        }
         // 1. SENSOR WAKE-UP GUARD (The Fix)
         // If the checkpoint is 0 (just started) and the sensor reports real steps (e.g., 23),
         // we assume these are pre-existing steps. Snap to them without drawing.
@@ -806,36 +847,134 @@ fun StepCounterScreen(
                 val calculatedEndTime = lastCheckpointTime.plusSeconds(estimatedSeconds)
                 val now = now()
                 val finalEndTime = if (calculatedEndTime.isAfter(now)) now else calculatedEndTime
-                // Generate interpolated trail points for missed steps
-                val catchUpResult = extendTrail(
-                    startLat = currentLat,
-                    startLon = currentLon,
-                    startTime = lastCheckpointTime,
-                    steps = stepsSinceCheckpoint,
-                    stepLengthMeters = strideLength,
-                    endTime = finalEndTime,
-                    importedRoute = importedRoute,
-                    startingWaypointIndex = routeTargetIndex,
-                    loopRouteBackwards = loopRouteBackwards,
-                    loopRouteContinuously = loopRouteContinuously,// Pass the setting
-                    initialRouteDirection = routeDirection   // Pass the direction
-                )
-                val missedPath = catchUpResult.first
-                routeTargetIndex = catchUpResult.second
-                routeDirection = catchUpResult.third
 
-                routePrefs.edit()
-                    .putInt("savedRouteIndex", routeTargetIndex)
-                    .putInt("savedRouteDirection", routeDirection)
-                    .apply()
+                // ---> NEW: AUTONOMOUS FAST-FORWARD SIMULATOR <---
+                if (isFollowRoadMode) {
+                    val graph = activeRoadGraph!!
+                    var simLat = currentLat
+                    var simLon = currentLon
+                    var simTime = lastCheckpointTime
+                    var simTargetId = followRoadTargetNode
+                    var simCurrentId = followRoadCurrentNode
 
-                liveTrail = liveTrail + missedPath
+                    val fastForwardPoints = mutableListOf<TrailPoint>()
+                    var remainingDistance = stepsSinceCheckpoint * strideLength
+                    val stepDist = strideLength * 2.0 // Simulate slightly larger strides to process faster
 
-                if (missedPath.isNotEmpty()) {
-                    val last = missedPath.last()
-                    currentLat = last.lat
-                    currentLon = last.lon
-                    lastCheckpointTime = last.time
+                    while (remainingDistance > 0) {
+                        val targetNode = graph.nodes[simTargetId]
+                        if (targetNode == null) break // We ran off the edge of the map!
+
+                        val distToTarget = haversineMeters(simLat, simLon, targetNode.lat, targetNode.lon)
+
+                        // Variables to hold the final drawn dot
+                        var pointToSaveLat = simLat
+                        var pointToSaveLon = simLon
+
+                        if (distToTarget <= stepDist) {
+                            simLat = targetNode.lat
+                            simLon = targetNode.lon
+                            remainingDistance -= distToTarget
+
+                            // Intersections don't get noise, keep the turns sharp!
+                            pointToSaveLat = simLat
+                            pointToSaveLon = simLon
+
+                            val connectedEdges = graph.adjacencyList[targetNode.id] ?: emptyList()
+                            val validNextEdges = if (connectedEdges.size > 1) {
+                                connectedEdges.filter { it.targetNodeId != simCurrentId }
+                            } else {
+                                connectedEdges
+                            }
+
+                            val nextEdge = validNextEdges.randomOrNull()
+                            if (nextEdge != null) {
+                                followRoadLastNode = simCurrentId
+                                simCurrentId = targetNode.id
+                                simTargetId = nextEdge.targetNodeId
+                            } else {
+                                break // Dead end with no way out
+                            }
+                        } else {
+                            val roadBearing = calculateBearing(simLat, simLon, targetNode.lat, targetNode.lon)
+                            val rad = Math.toRadians(roadBearing)
+
+                            val metersPerDegLat = 111_320.0
+                            val metersPerDegLon = 111_320.0 * kotlin.math.cos(Math.toRadians(simLat))
+
+                            // Move the true center forward
+                            simLat += (stepDist / metersPerDegLat) * kotlin.math.cos(rad)
+                            simLon += (stepDist / metersPerDegLon) * kotlin.math.sin(rad)
+                            remainingDistance -= stepDist
+
+                            // ---> ADD THE WOBBLE TO THE SIMULATOR <---
+                            val driftChange = (-100..100).random() / 100.0
+                            currentLateralOffset = (currentLateralOffset + driftChange).coerceIn(-4.0, 4.0)
+
+                            val noisyPoint = addNoiseToCoordinate(
+                                baseLat = simLat,
+                                baseLon = simLon,
+                                roadBearing = roadBearing,
+                                offsetMeters = currentLateralOffset
+                            )
+
+                            // Save the wobbly point to be drawn!
+                            pointToSaveLat = noisyPoint.lat
+                            pointToSaveLon = noisyPoint.lon
+                        }
+
+                        simTime = simTime.plusSeconds(1) // Fake time progression
+                        fastForwardPoints.add(TrailPoint(pointToSaveLat, pointToSaveLon, simTime))
+                    }
+
+                    // Finalize the fast-forward State Machine
+                    currentLat = simLat
+                    currentLon = simLon
+                    lastCheckpointTime = simTime
+                    followRoadCurrentNode = simCurrentId
+                    followRoadTargetNode = simTargetId
+
+                    routePrefs.edit()
+                        .putLong("followRoadCurrentNode", followRoadCurrentNode)
+                        .putLong("followRoadTargetNode", followRoadTargetNode)
+                        .putLong("followRoadLastNode", followRoadLastNode)
+                        .apply()
+
+                    liveTrail = liveTrail + fastForwardPoints
+                }
+                // ---> EXISTING GPX/FREE WALK CATCH-UP <---
+                else {
+                    // Generate interpolated trail points for missed steps
+                    val catchUpResult = extendTrail(
+                        startLat = currentLat,
+                        startLon = currentLon,
+                        startTime = lastCheckpointTime,
+                        steps = stepsSinceCheckpoint,
+                        stepLengthMeters = strideLength,
+                        endTime = finalEndTime,
+                        importedRoute = importedRoute,
+                        startingWaypointIndex = routeTargetIndex,
+                        loopRouteBackwards = loopRouteBackwards,
+                        loopRouteContinuously = loopRouteContinuously,
+                        initialRouteDirection = routeDirection
+                    )
+                    val missedPath = catchUpResult.first
+                    routeTargetIndex = catchUpResult.second
+                    routeDirection = catchUpResult.third
+
+                    routePrefs.edit()
+                        .putInt("savedRouteIndex", routeTargetIndex)
+                        .putInt("savedRouteDirection", routeDirection)
+                        .apply()
+
+                    liveTrail = liveTrail + missedPath
+
+                    if (missedPath.isNotEmpty()) {
+                        val last = missedPath.last()
+                        currentLat = last.lat
+                        currentLon = last.lon
+                        lastCheckpointTime = last.time
+                    }
                 }
             }
             // 2. NORMAL MODE.
@@ -843,71 +982,144 @@ fun StepCounterScreen(
                 val now = now()
                 val distanceMeters = stepsSinceCheckpoint * strideLength
 
+                // ---> THE FIX: STRICT MODE SEPARATION <---
+                if (isFollowRoadMode) {
+                    if (activeRoadGraph != null) {
+                        val graph = activeRoadGraph!!
+                        val targetNode = graph.nodes[followRoadTargetNode]
 
-                if (importedRoute.size > 1) {
+                        if (targetNode != null) {
+                            val distToTarget = haversineMeters(currentLat, currentLon, targetNode.lat, targetNode.lon)
 
-                    // NEW: Dynamic radius check
-                    while (routeTargetIndex >= 0 && routeTargetIndex < importedRoute.size) {
-                        val isEndPoint = (routeTargetIndex == 0 || routeTargetIndex == importedRoute.size - 1)
+                            if (distToTarget <= distanceMeters.coerceAtLeast(2.0)) {
+                                // Snap to intersection
+                                currentLat = targetNode.lat
+                                currentLon = targetNode.lon
 
-                        // 1. Get our base strictness
-                        val baseRadius = if (isEndPoint) 1.5 else 5.0
+                                val connectedEdges = graph.adjacencyList[targetNode.id] ?: emptyList()
+                                val validNextEdges = if (connectedEdges.size > 1) {
+                                    connectedEdges.filter { it.targetNodeId != followRoadCurrentNode }
+                                } else {
+                                    connectedEdges
+                                }
 
-                        // 2. Widen the net if we are about to make a massive multi-step jump!
-                        val hitRadius = baseRadius.coerceAtLeast(distanceMeters).coerceAtMost(8.0)
+                                val nextEdge = validNextEdges.randomOrNull()
 
-                        if (haversineMeters(currentLat, currentLon, importedRoute[routeTargetIndex].lat, importedRoute[routeTargetIndex].lon) < hitRadius) {
-                            routeTargetIndex += routeDirection
+                                if (nextEdge != null) {
+                                    followRoadLastNode = followRoadCurrentNode
+                                    followRoadCurrentNode = targetNode.id
+                                    followRoadTargetNode = nextEdge.targetNodeId
 
-                            routePrefs.edit()
-                                .putInt("savedRouteIndex", routeTargetIndex)
-                                .putInt("savedRouteDirection", routeDirection)
-                                .apply()
-                        } else {
-                            break // We haven't reached this point yet
-                        }}
+                                    routePrefs.edit()
+                                        .putLong("followRoadCurrentNode", followRoadCurrentNode)
+                                        .putLong("followRoadTargetNode", followRoadTargetNode)
+                                        .putLong("followRoadLastNode", followRoadLastNode)
+                                        .apply()
+                                }
 
-                    if (routeTargetIndex >= importedRoute.size) {
-                        if (loopRouteContinuously) {
-                            routeTargetIndex = 0
-                            routeDirection = 1
-                        } else if (loopRouteBackwards) {
-                            routeDirection = -1
-                            routeTargetIndex = (importedRoute.size - 2).coerceAtLeast(0)
+                                val newPoint = TrailPoint(currentLat, currentLon, now)
+                                liveTrail = liveTrail + newPoint
+                                lastCheckpointTime = now
+
+                            } else {
+                                // Walking down corridor
+                                // 4. WE ARE WALKING DOWN THE CORRIDOR
+                                val roadBearing = calculateBearing(currentLat, currentLon, targetNode.lat, targetNode.lon)
+                                val rad = Math.toRadians(roadBearing)
+
+                                val metersPerDegLat = 111_320.0
+                                val metersPerDegLon = 111_320.0 * kotlin.math.cos(Math.toRadians(currentLat))
+
+                                // Move the app's internal "True Center" forward
+                                currentLat += (distanceMeters / metersPerDegLat) * kotlin.math.cos(rad)
+                                currentLon += (distanceMeters / metersPerDegLon) * kotlin.math.sin(rad)
+
+                                // ---> 5. THE NOISE FILTER (FR2.4) <---
+                                // Drift left or right by up to 1.0 meter this step
+                                val driftChange = (-100..100).random() / 100.0
+
+                                // Add it to our previous position, but strictly clamp it to the +/- 4.0m requirement!
+                                currentLateralOffset = (currentLateralOffset + driftChange).coerceIn(-4.0, 4.0)
+
+                                val noisyPoint = addNoiseToCoordinate(
+                                    baseLat = currentLat,
+                                    baseLon = currentLon,
+                                    roadBearing = roadBearing,
+                                    offsetMeters = currentLateralOffset // Pass the smoothed offset
+                                )
+
+                                // Add the wobbly point to the map!
+                                liveTrail = liveTrail + noisyPoint
+                                lastCheckpointTime = now
+                            }
                         }
-                    } else if (routeTargetIndex < 0) {
-                        if (loopRouteContinuously) {
-                            routeTargetIndex = importedRoute.size - 1
-                            routeDirection = -1
-                        } else if (loopRouteBackwards) {
-                            routeDirection = 1
-                            routeTargetIndex = 1.coerceAtMost(importedRoute.size - 1)
-                        }
+                    } else {
+                        // ---> THE FIX: GUARD CLAUSE <---
+                        // The map is currently wiped/loading. Do absolutely nothing!
+                        // This prevents the Free Walk math from taking over and causing zig-zags.
+                        return@LaunchedEffect
                     }
+                }
+                // ---> FREE WALK AND GPX MATH <---
+                else {
+                    if (importedRoute.size > 1) {
+                        // Dynamic radius check
+                        while (routeTargetIndex >= 0 && routeTargetIndex < importedRoute.size) {
+                            val isEndPoint = (routeTargetIndex == 0 || routeTargetIndex == importedRoute.size - 1)
+                            val baseRadius = if (isEndPoint) 1.5 else 5.0
+                            val hitRadius = baseRadius.coerceAtLeast(distanceMeters).coerceAtMost(8.0)
 
-                    if (routeTargetIndex >= 0 && routeTargetIndex < importedRoute.size) {
-                        val target = importedRoute[routeTargetIndex]
-                        walkingDirection = calculateBearing(currentLat, currentLon, target.lat, target.lon)
-                        walkingDirection += (-2..2).random()
+                            if (haversineMeters(currentLat, currentLon, importedRoute[routeTargetIndex].lat, importedRoute[routeTargetIndex].lon) < hitRadius) {
+                                routeTargetIndex += routeDirection
+                                routePrefs.edit()
+                                    .putInt("savedRouteIndex", routeTargetIndex)
+                                    .putInt("savedRouteDirection", routeDirection)
+                                    .apply()
+                            } else {
+                                break
+                            }
+                        }
+
+                        if (routeTargetIndex >= importedRoute.size) {
+                            if (loopRouteContinuously) {
+                                routeTargetIndex = 0
+                                routeDirection = 1
+                            } else if (loopRouteBackwards) {
+                                routeDirection = -1
+                                routeTargetIndex = (importedRoute.size - 2).coerceAtLeast(0)
+                            }
+                        } else if (routeTargetIndex < 0) {
+                            if (loopRouteContinuously) {
+                                routeTargetIndex = importedRoute.size - 1
+                                routeDirection = -1
+                            } else if (loopRouteBackwards) {
+                                routeDirection = 1
+                                routeTargetIndex = 1.coerceAtMost(importedRoute.size - 1)
+                            }
+                        }
+
+                        if (routeTargetIndex >= 0 && routeTargetIndex < importedRoute.size) {
+                            val target = importedRoute[routeTargetIndex]
+                            walkingDirection = calculateBearing(currentLat, currentLon, target.lat, target.lon)
+                            walkingDirection += (-2..2).random()
+                        } else {
+                            walkingDirection += (-10..10).random()
+                        }
                     } else {
                         walkingDirection += (-10..10).random()
                     }
-                } else {
-                    walkingDirection += (-10..10).random()
+
+                    val rad = Math.toRadians(walkingDirection)
+                    val metersPerDegLat = 111_320.0
+                    val metersPerDegLon = 111_320.0 * cos(Math.toRadians(currentLat))
+
+                    currentLat += (distanceMeters / metersPerDegLat) * cos(rad)
+                    currentLon += (distanceMeters / metersPerDegLon) * sin(rad)
+
+                    val newPoint = TrailPoint(currentLat, currentLon, now)
+                    liveTrail = liveTrail + newPoint
+                    lastCheckpointTime = now
                 }
-                // Drift direction slightly
-                val rad = Math.toRadians(walkingDirection)
-
-                val metersPerDegLat = 111_320.0
-                val metersPerDegLon = 111_320.0 * cos(Math.toRadians(currentLat)) // Scale by Latitude
-
-// 2. Apply to coordinates
-                currentLat += (distanceMeters / metersPerDegLat) * cos(rad)
-                currentLon += (distanceMeters / metersPerDegLon) * sin(rad)
-
-                val newPoint = TrailPoint(currentLat, currentLon, now)
-                liveTrail = liveTrail + newPoint
-                lastCheckpointTime = now
             }
 
             // 3. SAVE STATE
@@ -1058,6 +1270,11 @@ fun StepCounterScreen(
                             val startLogic: () -> Unit = {
                                 onClearSavedData()
 
+                                if (importedRoute.isNotEmpty()) {
+                                    isFollowRoadMode = false
+                                    routePrefs.edit().putBoolean("isFollowRoadMode", false).apply()
+                                }
+
                                 val newSessionStart = routeTargetIndex.coerceIn(0, importedRoute.lastIndex.coerceAtLeast(0))
                                 routePrefs.edit().putInt("sessionStartIndex", newSessionStart).apply()
 
@@ -1065,7 +1282,7 @@ fun StepCounterScreen(
                                 if (importedRoute.isNotEmpty()) {
                                     currentLat = importedRoute[newSessionStart].lat
                                     currentLon = importedRoute[newSessionStart].lon
-                                } else {
+                                } else if(!isFollowRoadMode){
                                     currentLat = homeLat
                                     currentLon = homeLon
                                 }
@@ -1088,9 +1305,8 @@ fun StepCounterScreen(
                                 pendingSessionAction = startLogic
                                 showRouteModeDialog = true
                             } else if (importedRoute.isEmpty()) {
-                                // Optional: If you still have the Free Walk dialog, trigger it here.
-                                // Otherwise, just run startLogic()
-                                startLogic()
+                                pendingSessionAction = startLogic
+                                showFreeWalkModeDialog = true
                             } else {
                                 // They have a GPX AND they already chose a behavior previously. Just start!
                                 startLogic()
@@ -1098,6 +1314,8 @@ fun StepCounterScreen(
 
                         }
                     ) { Text("Start") }
+
+
 
                     Button(
                         // Ensure button is only clickable if session is running AND we aren't already generating
@@ -1233,6 +1451,7 @@ fun StepCounterScreen(
                     ) {
                         Text("Look up current location")
                     }
+
                     if (importedRoute.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedButton(
@@ -1351,17 +1570,20 @@ fun StepCounterScreen(
 
                                     routePrefs.edit {
                                         putBoolean("loopBackwards", false)
-                                            .putBoolean("loopContinuously", false)
-                                            putBoolean("hasSelectedRouteBehavior", false)
-                                            .putInt(
-                                                "savedRouteIndex",
-                                                0
-                                            ) // NEW: Wipe saved progress
-                                            .putInt(
-                                                "savedRouteDirection",
-                                                1
-                                            ) // NEW: Wipe saved direction
+                                        putBoolean("loopContinuously", false)
+                                        putBoolean("hasSelectedRouteBehavior", false)
+                                        putBoolean("isFollowRoadMode", false)
+                                        putInt("savedRouteIndex", 0) // NEW: Wipe saved progress
+                                        putInt("savedRouteDirection", 1) // NEW: Wipe saved direction
+                                        putLong("followRoadCurrentNode", -1L)
+                                        putLong("followRoadTargetNode", -1L)
+                                        putLong("followRoadLastNode", -1L)
                                     }
+                                    followRoadCurrentNode = -1L
+                                    followRoadTargetNode = -1L
+                                    followRoadLastNode = -1L
+                                    isFollowRoadMode = false // Clear Compose state
+                                    activeRoadGraph = null // Wipe the map from RAM
 
                                     // 2. Wipe the hard drive cache
                                     clearRouteFromInternalStorage(context)
@@ -1638,6 +1860,113 @@ fun StepCounterScreen(
                     }
                 }
             }
+    }
+        if (showFreeWalkModeDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!isGeneratingTrail) { // Prevent dismissing while map is downloading
+                    showFreeWalkModeDialog = false
+                    pendingSessionAction = null
+                }
+            },
+            title = { Text("Choose Walk Mode") },
+            text = {
+                Column {
+                    Text("How would you like to track this walk?", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Option 1: Normal Free Walk
+                    Button(
+                        onClick = {
+                            isFollowRoadMode = false
+                            routePrefs.edit().putBoolean("isFollowRoadMode", false).apply()
+
+                            showFreeWalkModeDialog = false
+                            pendingSessionAction?.invoke()
+                            pendingSessionAction = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isGeneratingTrail
+                    ) {
+                        Text("Random walk")
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Option 2: Autonomous Follow Roads
+                    Button(
+                        onClick = {
+                            isGeneratingTrail = true
+
+                            coroutineScope.launch {
+                                val downloadedGraph = fetchRoadGraph(
+                                    centerLat = currentLat,
+                                    centerLon = currentLon,
+                                    radiusMeters = 2000
+                                )
+
+                                val startIntersection = downloadedGraph.getClosestNode(currentLat, currentLon)
+
+                                if (startIntersection != null) {
+                                    val connectedRoads = downloadedGraph.adjacencyList[startIntersection.id]
+                                    val firstTarget = connectedRoads?.randomOrNull()?.targetNodeId ?: -1L
+
+                                    followRoadCurrentNode = startIntersection.id
+                                    followRoadTargetNode = firstTarget
+                                    followRoadLastNode = -1L
+
+                                    routePrefs.edit()
+                                        .putBoolean("isFollowRoadMode", true)
+                                        .putLong("followRoadCurrentNode", startIntersection.id)
+                                        .putLong("followRoadTargetNode", firstTarget)
+                                        .putLong("followRoadLastNode", -1L)
+                                        .apply()
+
+                                    isFollowRoadMode = true
+
+                                    // SNAP the starting GPS coordinates perfectly to the intersection!
+                                    currentLat = startIntersection.lat
+                                    currentLon = startIntersection.lon
+
+                                    activeRoadGraph = downloadedGraph
+
+                                    isGeneratingTrail = false
+                                    showFreeWalkModeDialog = false
+                                    pendingSessionAction?.invoke()
+                                    pendingSessionAction = null
+                                } else {
+                                    withContext(Dispatchers.Main) {
+                                        isGeneratingTrail = false
+                                        Toast.makeText(context, "No roads found! Defaulting to Free Walk.", Toast.LENGTH_LONG).show()
+                                        isFollowRoadMode = false
+                                        showFreeWalkModeDialog = false
+                                        pendingSessionAction?.invoke()
+                                        pendingSessionAction = null
+                                    }
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isGeneratingTrail
+                    ) {
+                        if (isGeneratingTrail) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Downloading Map...")
+                        } else {
+                            Text("Follow Roads")
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = {
+                    showFreeWalkModeDialog = false
+                    pendingSessionAction = null
+                }, enabled = !isGeneratingTrail) { Text("Cancel") }
+            }
+        )
     }
         if (showRouteModeDialog) {
 

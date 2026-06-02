@@ -19,15 +19,41 @@ data class MapNode(val id: Long, val lat: Double, val lon: Double)
 data class MapEdge(val targetNodeId: Long, val wayId: Long)
 
 class RoadGraph {
-    // Stores every physical coordinate
     val nodes = mutableMapOf<Long, MapNode>()
-
-    // The "Intersection Dictionary" - tells the app which ways it can go from any given point
     val adjacencyList = mutableMapOf<Long, MutableList<MapEdge>>()
 
     fun addEdge(fromId: Long, toId: Long, wayId: Long) {
         adjacencyList.getOrPut(fromId) { mutableListOf() }.add(MapEdge(toId, wayId))
-        adjacencyList.getOrPut(toId) { mutableListOf() }.add(MapEdge(fromId, wayId)) // Roads go both ways!
+        adjacencyList.getOrPut(toId) { mutableListOf() }.add(MapEdge(fromId, wayId))
+    }
+
+    // ---> NEW: THE SNAPPING ALGORITHM <---
+    fun getClosestNode(targetLat: Double, targetLon: Double): MapNode? {
+        if (nodes.isEmpty()) return null
+
+        var closestNode: MapNode? = null
+        var shortestDistance = Double.MAX_VALUE
+
+        for ((_, node) in nodes) {
+            val distance = calculateDistance(targetLat, targetLon, node.lat, node.lon)
+            if (distance < shortestDistance) {
+                shortestDistance = distance
+                closestNode = node
+            }
+        }
+        return closestNode
+    }
+
+    // Standard Haversine formula to measure real-world distance in meters
+    private fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val earthRadius = 6378137.0 // meters
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = kotlin.math.sin(dLat / 2) * kotlin.math.sin(dLat / 2) +
+                kotlin.math.cos(Math.toRadians(lat1)) * kotlin.math.cos(Math.toRadians(lat2)) *
+                kotlin.math.sin(dLon / 2) * kotlin.math.sin(dLon / 2)
+        val c = 2 * kotlin.math.atan2(kotlin.math.sqrt(a), kotlin.math.sqrt(1 - a))
+        return earthRadius * c
     }
 }
 // This must run on a background thread!
@@ -135,26 +161,21 @@ suspend fun snapTrailToRoad(rawPoints: List<TrailPoint>): List<TrailPoint> {
 }
 
 @RequiresApi(Build.VERSION_CODES.O)
-fun addNoiseToCoordinate(baseLat: Double, baseLon: Double, roadBearing: Double): TrailPoint {
+// Generates a point exactly "offsetMeters" away from the center of the road
+fun addNoiseToCoordinate(baseLat: Double, baseLon: Double, roadBearing: Double, offsetMeters: Double): TrailPoint {
     val earthRadiusMeters = 6378137.0
 
-    // 1. Roll the dice for a random offset between -4.0 and +4.0 meters
-    val randomOffset = (-400..400).random() / 100.0
-
-    // 2. Calculate the perpendicular angle (90 degrees off the road's direction)
     val perpendicularBearing = Math.toRadians(roadBearing + 90.0)
-    val angularDistance = randomOffset / earthRadiusMeters
+    val angularDistance = offsetMeters / earthRadiusMeters
 
-    // 3. Apply the offset using standard Haversine projection math
     val latRad = Math.toRadians(baseLat)
     val lonRad = Math.toRadians(baseLon)
 
-    val newLatRad = asin(sin(latRad) * cos(angularDistance) +
-            cos(latRad) * sin(angularDistance) * cos(perpendicularBearing))
+    val newLatRad = kotlin.math.asin(kotlin.math.sin(latRad) * kotlin.math.cos(angularDistance) +
+            kotlin.math.cos(latRad) * kotlin.math.sin(angularDistance) * kotlin.math.cos(perpendicularBearing))
 
-    val newLonRad = lonRad + atan2(sin(perpendicularBearing) * sin(angularDistance) * cos(latRad),
-        cos(angularDistance) - sin(latRad) * sin(newLatRad))
+    val newLonRad = lonRad + kotlin.math.atan2(kotlin.math.sin(perpendicularBearing) * kotlin.math.sin(angularDistance) * kotlin.math.cos(latRad),
+        kotlin.math.cos(angularDistance) - kotlin.math.sin(latRad) * kotlin.math.sin(newLatRad))
 
-    // 4. Return the new "noisy" coordinate!
-    return TrailPoint(Math.toDegrees(newLatRad), Math.toDegrees(newLonRad), LocalDateTime.now())
+    return TrailPoint(Math.toDegrees(newLatRad), Math.toDegrees(newLonRad), java.time.LocalDateTime.now())
 }
