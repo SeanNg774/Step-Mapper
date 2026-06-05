@@ -23,6 +23,11 @@ import androidx.core.content.edit
 class StepCounterViewModel(
     private val routePrefs: SharedPreferences
 ) : ViewModel() {
+    // SENSOR & REAL-TIME STATE
+    var totalSteps by mutableStateOf(0)
+    var isSessionRunning by mutableStateOf(routePrefs.getBoolean("isSessionRunning", false))
+    var sessionStartTime by mutableStateOf(routePrefs.getLong("sessionStartTime", 0L))
+    var sessionStartSteps by mutableStateOf(routePrefs.getInt("sessionStartSteps", 0))
 
     // ==========================================
     // 1. LOCATION & MAP STATE
@@ -106,11 +111,11 @@ class StepCounterViewModel(
     fun saveRouteBehavior(loopBackwards: Boolean, loopContinuously: Boolean) {
         this.loopRouteBackwards = loopBackwards
         this.loopRouteContinuously = loopContinuously
-        routePrefs.edit()
-            .putBoolean("loopBackwards", loopBackwards)
-            .putBoolean("loopContinuously", loopContinuously)
-            .putBoolean("hasSelectedRouteBehavior", true)
-            .apply()
+        routePrefs.edit {
+            putBoolean("loopBackwards", loopBackwards)
+            putBoolean("loopContinuously", loopContinuously)
+            putBoolean("hasSelectedRouteBehavior", true)
+        }
     }
 
     fun onStepTick(
@@ -480,13 +485,13 @@ class StepCounterViewModel(
     }
 
     fun resumeSession(
+        context: android.content.Context,
         totalSteps: Int,
         initialTrail: List<TrailPoint>,
         initialSteps: Int,
         initialDuration: Long,
         onClearSavedData: () -> Unit,
         onTrailUpdated: (List<TrailPoint>, Int, Long) -> Unit,
-        onStartSession: (Int, Long) -> Unit,
         onShowToast: (String) -> Unit
     ) {
         val historyTrail = if (lastSessionTrail.isNotEmpty() && lastSessionSteps > 0) lastSessionTrail else initialTrail
@@ -517,7 +522,6 @@ class StepCounterViewModel(
             manualResumeTime = System.currentTimeMillis()
             onClearSavedData()
             onTrailUpdated(liveTrail, historySteps, historyDuration)
-            onStartSession(historySteps, historyDuration)
         }
     }
 
@@ -583,5 +587,144 @@ class StepCounterViewModel(
         this.lastStepCheckpoint = sessionStartSteps + initialSteps
         this.strideLength = initialStride
         this.resumePoint = initialTrail.lastOrNull()
+    }
+    fun onStepsReceived(steps: Int) {
+        if (isSessionRunning && steps > 0) {
+            val currentBaseline = sessionStartSteps
+            if (currentBaseline == 0 || (System.currentTimeMillis() - sessionStartTime < 2000)) {
+                if (steps > currentBaseline) {
+                    sessionStartSteps = steps
+                    routePrefs.edit().putInt("sessionStartSteps", steps).apply()
+                }
+            }
+        }
+        totalSteps = steps
+    }
+    fun startSession(
+        context: android.content.Context, // NEW
+        onClearSavedData: () -> Unit,
+        onTrailUpdated: (List<TrailPoint>, Int, Long) -> Unit
+    ) {
+        // 1. Start the Android Service
+        val startIntent = android.content.Intent(context, com.example.stepcounter3.StepService::class.java)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            context.startForegroundService(startIntent)
+        } else {
+            context.startService(startIntent)
+        }
+
+        // 2. Set Session States
+        isSessionRunning = true
+        sessionStartTime = System.currentTimeMillis()
+        sessionStartSteps = totalSteps
+
+        routePrefs.edit()
+            .putBoolean("isSessionRunning", true)
+            .putLong("sessionStartTime", sessionStartTime)
+            .putInt("sessionStartSteps", sessionStartSteps)
+            .apply()
+
+        // 3. Normal Start Logic
+        onClearSavedData()
+        if (importedRoute.isNotEmpty()) {
+            isFollowRoadMode = false
+            routePrefs.edit().putBoolean("isFollowRoadMode", false).apply()
+        }
+
+        val newSessionStart = routeTargetIndex.coerceIn(0, importedRoute.lastIndex.coerceAtLeast(0))
+        routePrefs.edit().putInt("sessionStartIndex", newSessionStart).apply()
+
+        lastUpdatedSteps = 0
+        if (importedRoute.isNotEmpty()) {
+            currentLat = importedRoute[newSessionStart].lat
+            currentLon = importedRoute[newSessionStart].lon
+        } else if (!isFollowRoadMode) {
+            currentLat = homeLat
+            currentLon = homeLon
+        }
+
+        val startPoint = TrailPoint(currentLat, currentLon, LocalDateTime.now())
+        liveTrail = listOf(startPoint)
+        onTrailUpdated(liveTrail, 0, 0L)
+
+        lastStepCheckpoint = totalSteps
+        lastCheckpointTime = LocalDateTime.now()
+        manualResumeTime = System.currentTimeMillis()
+    }
+
+    fun endSession(
+        context: android.content.Context, // NEW
+        onTrailUpdated: (List<TrailPoint>, Int, Long) -> Unit
+    ) {
+        // 1. Stop the Android Service
+        val stopIntent = android.content.Intent(context, StepService::class.java)
+        stopIntent.action = "STOP_SERVICE"
+        context.startService(stopIntent)
+
+        // 2. Clear Session States
+        isSessionRunning = false
+        routePrefs.edit().putBoolean("isSessionRunning", false).apply()
+
+        // 3. Normal End Logic
+        isGeneratingTrail = true
+        val exactEndTime = LocalDateTime.now()
+
+        viewModelScope.launch(Dispatchers.Default) {
+            val remainingUnprocessedSteps = totalSteps - lastStepCheckpoint
+
+            val finalPath = if (remainingUnprocessedSteps > 0 && liveTrail.isNotEmpty()) {
+                val lastPoint = liveTrail.last()
+                extendTrail(
+                    startLat = lastPoint.lat, startLon = lastPoint.lon, startTime = lastPoint.time,
+                    endTime = exactEndTime, steps = remainingUnprocessedSteps, stepLengthMeters = strideLength,
+                    importedRoute = importedRoute, startingWaypointIndex = routeTargetIndex,
+                    loopRouteBackwards = loopRouteBackwards, loopRouteContinuously = loopRouteContinuously,
+                    initialRouteDirection = routeDirection
+                ).first
+            } else emptyList()
+
+            withContext(Dispatchers.Main) {
+                if (finalPath.isNotEmpty()) {
+                    liveTrail = liveTrail + finalPath
+                    val veryLast = liveTrail.last()
+                    currentLat = veryLast.lat
+                    currentLon = veryLast.lon
+                    lastCheckpointTime = veryLast.time
+                    lastStepCheckpoint = totalSteps
+                } else if (liveTrail.isNotEmpty()) {
+                    val lastPoint = liveTrail.last()
+                    liveTrail = liveTrail + TrailPoint(lastPoint.lat, lastPoint.lon, exactEndTime)
+                    lastCheckpointTime = exactEndTime
+                }
+
+                if (liveTrail.isNotEmpty()) resumePoint = liveTrail.last()
+
+                val finalSessionSteps = (totalSteps - sessionStartSteps).coerceAtLeast(0)
+                val finalDistanceKm = (finalSessionSteps * strideLength) / 1000.0
+                val finalDurationMillis = elapsedTime * 1000L
+
+                val finalSpeed = if (liveTrail.size >= 2) {
+                    val p1 = liveTrail[liveTrail.size - 2]
+                    val p2 = liveTrail.last()
+                    val dist = haversineMeters(p1.lat, p1.lon, p2.lat, p2.lon)
+                    val time = java.time.Duration.between(p1.time, p2.time).seconds
+                    if (time > 0) (dist / time) * 3.6 else 0.0
+                } else 0.0
+
+                onTrailUpdated(liveTrail, finalSessionSteps, finalDurationMillis)
+                lastSessionSteps = finalSessionSteps
+                lastSessionDistance = finalDistanceKm
+                lastSessionSpeed = finalSpeed
+                lastSessionTrail = liveTrail.toList()
+                lastSessionDuration = finalDurationMillis
+
+                routePrefs.edit {
+                    putInt("savedRouteIndex", routeTargetIndex)
+                    putInt("savedRouteDirection", routeDirection)
+                }
+
+                isGeneratingTrail = false
+            }
+        }
     }
 }

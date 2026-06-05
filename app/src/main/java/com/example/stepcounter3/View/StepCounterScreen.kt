@@ -1,8 +1,9 @@
 @file:OptIn(ExperimentalMaterial3Api::class)
 @file:Suppress("COMPOSE_APPLIER_CALL_MISMATCH")
 
-package com.example.stepcounter3.ui
+package com.example.stepcounter3.View
 
+import android.annotation.SuppressLint
 import android.os.Build
 import com.example.stepcounter3.TrailPoint
 import android.widget.Toast
@@ -13,8 +14,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.flow.MutableStateFlow
-import androidx.compose.runtime.collectAsState
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
@@ -30,7 +29,6 @@ import androidx.compose.material.icons.Icons
 import com.example.stepcounter3.buildGpxXml
 import com.example.stepcounter3.saveGpxToDownloads
 import com.example.stepcounter3.haversineMeters
-import java.time.Duration
 import com.example.stepcounter3.shareGpxFile
 import com.google.maps.android.compose.rememberUpdatedMarkerState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -52,7 +50,6 @@ import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.example.stepcounter3.R
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
 import android.graphics.Canvas
 import androidx.core.content.ContextCompat
 import com.google.android.gms.maps.model.BitmapDescriptor
@@ -381,6 +378,7 @@ fun MapScreen(
     }
 }
 
+@SuppressLint("DefaultLocale")
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun StepCounterScreen(
@@ -395,22 +393,9 @@ fun StepCounterScreen(
     initialTrail: List<TrailPoint>,
     onTrailUpdated: (List<TrailPoint>, Int, Long) -> Unit,
     initialSteps: Int,
-    totalStepsFlow: MutableStateFlow<Int>,
-    previousTotalSteps: Float,
-    onStartSession: (Int, Long) -> Unit,
-    onEndSession: (Int, Double, Double, Long) -> Unit,
-    isSessionRunningFlow: MutableStateFlow<Boolean>,
-    sessionStartTimeFlow: MutableStateFlow<Long>,
-    sessionStartStepsFlow: MutableStateFlow<Int>,
-    onSyncStepBaseline: (Int) -> Unit,
-
-    ) {
-    val totalSteps by totalStepsFlow.collectAsState()
-    val sessionStartSteps by sessionStartStepsFlow.collectAsState()
-    (totalSteps - previousTotalSteps.toInt()).coerceAtLeast(0)
+    onSyncStepBaseline: (Int) -> Unit
+) {
     val context = LocalContext.current
-    val isSessionRunning by isSessionRunningFlow.collectAsState()
-    val sessionStartTime by sessionStartTimeFlow.collectAsState()
     val routePrefs = context.getSharedPreferences("RouteSettings", Context.MODE_PRIVATE)
     val coroutineScope = rememberCoroutineScope()
 
@@ -423,32 +408,32 @@ fun StepCounterScreen(
             initialSteps = initialSteps,
             initialDuration = initialDuration,
             initialStride = initialStrideLength,
-            sessionStartSteps = sessionStartStepsFlow.value
+            sessionStartSteps = viewModel.sessionStartSteps
         )
     }
 
 // Listen for when the session starts or resumes
-    LaunchedEffect(isSessionRunning) {
-        if (isSessionRunning) {
+    LaunchedEffect(viewModel.isSessionRunning) {
+        if (viewModel.isSessionRunning) {
             viewModel.sessionResumedTimestamp = System.currentTimeMillis()
         }
     }
 
 
     // Sync checkpoint when sessionStartSteps loads from memory
-    LaunchedEffect(sessionStartSteps, isSessionRunning) {
+    LaunchedEffect(viewModel.sessionStartSteps, viewModel.isSessionRunning) {
         // If we are resuming a running session that has no trail yet (just the start point),
         // we must align the checkpoint with the Session Start, otherwise we get a huge "lifetime" trail.
-        if (isSessionRunning && initialTrail.size <= 1 && sessionStartSteps > 0) {
+        if (viewModel.isSessionRunning && initialTrail.size <= 1 && viewModel.sessionStartSteps > 0) {
             // Only update if the checkpoint is currently "behind" (e.g., 0)
-            if (viewModel.lastStepCheckpoint < sessionStartSteps) {
-                viewModel.lastStepCheckpoint = sessionStartSteps
+            if (viewModel.lastStepCheckpoint < viewModel.sessionStartSteps) {
+                viewModel.lastStepCheckpoint = viewModel.sessionStartSteps
             }
         }
     }
 
     val mapTrail =
-        if (isSessionRunning) viewModel.liveTrail else viewModel.lastSessionTrail
+        if (viewModel.isSessionRunning) viewModel.liveTrail else viewModel.lastSessionTrail
 
     if (viewModel.isPickingLocation) {
         LocationPickerScreen(
@@ -566,8 +551,8 @@ fun StepCounterScreen(
 
 
     // If the phone's RAM clears the graph while walking, silently re-download it
-    LaunchedEffect(isSessionRunning, viewModel.isFollowRoadMode, viewModel.activeRoadGraph) {
-        if (isSessionRunning && viewModel.isFollowRoadMode && viewModel.activeRoadGraph == null) {
+    LaunchedEffect(viewModel.isSessionRunning, viewModel.isFollowRoadMode, viewModel.activeRoadGraph) {
+        if (viewModel.isSessionRunning && viewModel.isFollowRoadMode && viewModel.activeRoadGraph == null) {
             coroutineScope.launch {
                 viewModel.activeRoadGraph = fetchRoadGraph(viewModel.currentLat, viewModel.currentLon, 2000)
             }
@@ -575,21 +560,21 @@ fun StepCounterScreen(
     }
 
     // Tick every second while session is running
-    LaunchedEffect(isSessionRunning) {
-        while (isSessionRunning) {
-           viewModel.elapsedTime = (System.currentTimeMillis() - sessionStartTime) / 1000
+    LaunchedEffect(viewModel.isSessionRunning) {
+        while (viewModel.isSessionRunning) {
+           viewModel.elapsedTime = (System.currentTimeMillis() - viewModel.sessionStartTime) / 1000
             delay(1000)
         }
     }
 
-    LaunchedEffect(totalSteps, isSessionRunning, viewModel.activeRoadGraph) {
+    LaunchedEffect(viewModel.totalSteps, viewModel.isSessionRunning, viewModel.activeRoadGraph) {
         viewModel.onStepTick(
-            totalSteps = totalSteps,
-            sessionStartSteps = sessionStartSteps,
-            isSessionRunning = isSessionRunning,
+            totalSteps = viewModel.totalSteps,
+            sessionStartSteps = viewModel.sessionStartSteps,
+            isSessionRunning = viewModel.isSessionRunning,
             onSyncStepBaseline = onSyncStepBaseline,
             onTrailUpdated = onTrailUpdated,
-            sessionStartTime = sessionStartTime
+            sessionStartTime = viewModel.sessionStartTime
         )
     }
 
@@ -597,12 +582,12 @@ fun StepCounterScreen(
 
 
     val sessionEndTime = System.currentTimeMillis()
-    val totalDurationMillis = sessionEndTime - sessionStartTimeFlow.collectAsState().value
+    val totalDurationMillis = sessionEndTime - viewModel.sessionStartTime
     val totalDurationSeconds = totalDurationMillis / 1000
 
     // Calculate distance and speed
-    val sessionSteps = if (isSessionRunning && totalSteps > 0) {
-        (totalSteps - sessionStartSteps).coerceAtLeast(0)
+    val sessionSteps = if (viewModel.isSessionRunning && viewModel.totalSteps > 0) {
+        (viewModel.totalSteps - viewModel.sessionStartSteps).coerceAtLeast(0)
     } else {
         0
     }
@@ -611,13 +596,13 @@ fun StepCounterScreen(
     val averageSpeedMps = if (totalDurationSeconds > 0) distanceMeters / totalDurationSeconds else 0.0
     averageSpeedMps * 3.6
     when {
-        isSessionRunning && viewModel.liveTrail.isNotEmpty() -> viewModel.liveTrail
+        viewModel.isSessionRunning && viewModel.liveTrail.isNotEmpty() -> viewModel.liveTrail
         viewModel.lastSessionTrail.isNotEmpty() -> viewModel.lastSessionTrail
         else -> viewModel.generatedTrail
     }
 
     val exportTrail = when {
-        isSessionRunning && viewModel.liveTrail.isNotEmpty() -> viewModel.liveTrail
+        viewModel.isSessionRunning && viewModel.liveTrail.isNotEmpty() -> viewModel.liveTrail
         viewModel.lastSessionTrail.isNotEmpty() -> viewModel.lastSessionTrail
         else -> viewModel.generatedTrail
     }
@@ -671,7 +656,7 @@ fun StepCounterScreen(
 
 
                 //  Session info while running
-                if (isSessionRunning) {
+                if (viewModel.isSessionRunning) {
                     Text("Steps: $sessionSteps", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "Distance: %.3f km".format(distanceKm),
@@ -680,7 +665,7 @@ fun StepCounterScreen(
                 }
                 //  Last session info after ending
                 // Last session info after ending
-                if (!isSessionRunning && viewModel.lastSessionSteps > 0) {
+                if (!viewModel.isSessionRunning && viewModel.lastSessionSteps > 0) {
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         shape = MaterialTheme.shapes.medium,
@@ -712,16 +697,14 @@ fun StepCounterScreen(
 
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     Button(
-                        enabled = !isSessionRunning,
+                        enabled = !viewModel.isSessionRunning,
                         onClick = {
                             // Package all the Start logic into a reusable block
                             val startLogic: () -> Unit = {
                                 viewModel.startSession(
-                                    totalSteps = totalSteps,
+                                    context = context,
                                     onClearSavedData = onClearSavedData,
-                                    onTrailUpdated = onTrailUpdated,
-                                    onStartSession = onStartSession
-                                )
+                                    onTrailUpdated = onTrailUpdated)
                             }
 
                             val hasSelectedBehavior = routePrefs.getBoolean("hasSelectedRouteBehavior", false)
@@ -741,13 +724,11 @@ fun StepCounterScreen(
 
                     Button(
                         // Ensure button is only clickable if session is running AND we aren't already generating
-                        enabled = isSessionRunning && !viewModel.isGeneratingTrail,
+                        enabled = viewModel.isSessionRunning && !viewModel.isGeneratingTrail,
                         onClick = {
                             viewModel.endSession(
-                                totalSteps = totalSteps,
-                                sessionStartSteps = sessionStartSteps,
-                                onTrailUpdated = onTrailUpdated,
-                                onEndSession = onEndSession
+                                context = context,
+                                onTrailUpdated = onTrailUpdated
                             )
                         }
                     ) {
@@ -766,7 +747,7 @@ fun StepCounterScreen(
                     }
                 }
 
-                if (isSessionRunning) {
+                if (viewModel.isSessionRunning) {
                     Button(
                         onClick = {
                             // 1. URL-Encode the label to prevent strict apps (like Earth) from crashing
@@ -818,24 +799,24 @@ fun StepCounterScreen(
 
 
 
-                if (!isSessionRunning && viewModel.resumePoint != null && totalSteps > 0) {
+                if (!viewModel.isSessionRunning && viewModel.resumePoint != null && viewModel.totalSteps > 0) {
                     Button(
                         onClick = {
                             viewModel.resumeSession(
-                                totalSteps = totalSteps,
+                                context = context,
+                                totalSteps = viewModel.totalSteps,
                                 initialTrail = initialTrail,
                                 initialSteps = initialSteps,
                                 initialDuration = initialDuration,
                                 onClearSavedData = onClearSavedData,
                                 onTrailUpdated = onTrailUpdated,
-                                onStartSession = onStartSession,
                                 onShowToast = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
                             )
                         }
                     ) { Text(" Resume from Last Trail") }
                     Spacer(modifier = Modifier.height(8.dp))
                 }
-                if (!isSessionRunning) {
+                if (!viewModel.isSessionRunning) {
                     Button(
                         onClick = { viewModel.isPickingLocation = true }
                     ) {
@@ -844,7 +825,7 @@ fun StepCounterScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                 }
 
-                if (!isSessionRunning) {
+                if (!viewModel.isSessionRunning) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -879,7 +860,7 @@ fun StepCounterScreen(
                 }
 
 
-                if (!isSessionRunning && (viewModel.lastSessionTrail.isNotEmpty() || initialTrail.isNotEmpty())) {
+                if (!viewModel.isSessionRunning && (viewModel.lastSessionTrail.isNotEmpty() || initialTrail.isNotEmpty())) {
 
                     HorizontalDivider()
                     Spacer(modifier = Modifier.height(16.dp))
@@ -918,7 +899,7 @@ fun StepCounterScreen(
                 }
 
 
-                if (!isSessionRunning) {
+                if (!viewModel.isSessionRunning) {
                     Button(
                         onClick = {
                             if (exportTrail.isNotEmpty()) {
@@ -968,7 +949,7 @@ fun StepCounterScreen(
                 }
 
 
-                if (!isSessionRunning) {
+                if (!viewModel.isSessionRunning) {
                     Button(
                         onClick = { viewModel.showStrideDialog = true }
                     ) {

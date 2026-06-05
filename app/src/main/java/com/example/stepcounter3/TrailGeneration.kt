@@ -8,13 +8,6 @@ import java.time.LocalDateTime
 
 
 
-data class TrailPoint(
-    val lat: Double,
-    val lon: Double,
-    val time: LocalDateTime
-)
-
-
 
 @RequiresApi(Build.VERSION_CODES.O)
 fun extendTrail(

@@ -18,8 +18,6 @@ import org.xmlpull.v1.XmlPullParser
 import java.io.InputStream
 import java.time.LocalDateTime
 
-
-
 @RequiresApi(Build.VERSION_CODES.O)
 fun buildGpxXml(points: List<TrailPoint>, name: String = "TrailRun"): String {
     if (points.isEmpty()) return ""
@@ -72,6 +70,7 @@ fun buildGpxXml(points: List<TrailPoint>, name: String = "TrailRun"): String {
         </gpx>
     """.trimIndent()
 }
+
 
 @RequiresApi(Build.VERSION_CODES.Q)
 fun saveGpxToDownloads(context: Context, fileName: String, gpxData: String): Uri? {

@@ -28,10 +28,7 @@ object PhotoTagger {
     @RequiresApi(Build.VERSION_CODES.O)
     private val EXIF_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss")
 
-    /**
-     * Tries to auto-tag photos based on their timestamp.
-     * Returns a list of URIs that could NOT be matched or written.
-     */
+
     @RequiresApi(Build.VERSION_CODES.O)
     fun tagAuto(context: Context, trail: List<TrailPoint>, uris: List<Uri>): TagResult {
         val unmatched = mutableListOf<Uri>()
@@ -213,7 +210,7 @@ object PhotoTagger {
         val minutes = ((absolute - degrees) * 60).toInt()
         val seconds = (absolute - degrees - minutes / 60.0) * 3600 * 1000 // Multiply by 1000 for precision
 
-        // Format: "num/denom,num/denom,num/denom"
+
         // We use 1000 as denominator for seconds to keep 3 decimal places of precision
         return "$degrees/1,$minutes/1,${seconds.toInt()}/1000"
     }}
