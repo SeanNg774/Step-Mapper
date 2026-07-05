@@ -80,8 +80,6 @@ import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.Marker
-import org.osmdroid.views.overlay.Polyline
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.stepcounter3.MapProvider
 import java.io.File
@@ -181,6 +179,7 @@ fun LocationPickerScreen(
                     org.osmdroid.views.MapView(ctx).apply {
                         setTileSource(org.osmdroid.tileprovider.tilesource.TileSourceFactory.MAPNIK)
                         setMultiTouchControls(true)
+                        zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER)
                         controller.setZoom(18.0)
                         controller.setCenter(org.osmdroid.util.GeoPoint(selectedPos.latitude, selectedPos.longitude))
 
