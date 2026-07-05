@@ -168,17 +168,6 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    composable("map") {
-                        var currentMapType by remember { mutableStateOf(MapType.NORMAL) }
-                        MapScreen(
-                            trail = trailState.value,
-                            mapType = currentMapType,
-                            onMapTypeToggle = {
-                                currentMapType =
-                                    if (currentMapType == MapType.NORMAL) MapType.HYBRID else MapType.NORMAL
-                            }
-                        )
-                    }
                 }
             }
         }

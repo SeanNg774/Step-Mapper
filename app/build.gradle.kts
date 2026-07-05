@@ -15,7 +15,7 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = 1
-        versionName = "1.5"
+        versionName = "1.5.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -47,6 +47,7 @@ android {
 }
 
 dependencies {
+
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("com.google.android.gms:play-services-maps:19.2.0")
     implementation("com.google.maps.android:maps-compose:6.12.2")
@@ -60,6 +61,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation(libs.androidx.documentfile)
+    implementation(libs.androidx.foundation)
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 
@@ -78,4 +80,6 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     implementation("com.mikhaellopez:circularprogressbar:3.1.0")
+    implementation("org.osmdroid:osmdroid-android:6.1.20")
+    implementation("com.google.code.gson:gson:2.10.1")
 }

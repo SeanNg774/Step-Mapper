@@ -21,26 +21,22 @@ fun extendTrail(
     startingWaypointIndex:Int = 0,
     loopRouteBackwards: Boolean = false,
     loopRouteContinuously: Boolean = false,
-    initialRouteDirection: Int = 1
+    initialRouteDirection: Int = 1,
+    stopAtRouteEnd: Boolean = false // <--- 1. NEW PARAMETER
 ): Triple<List<TrailPoint>, Int, Int > {
 
     if (steps <= 0) return Triple(emptyList(), startingWaypointIndex, initialRouteDirection)
     val points = mutableListOf<TrailPoint>()
     var lat = startLat
     var lon = startLon
-    var direction = Math.random() * 360 // start facing a random direction
+    var direction = Math.random() * 360
     var currentTime = startTime
     var currentIndex = startingWaypointIndex
     var currentRouteDir = initialRouteDirection
 
-    // Generate random weights
-    // creates fast and slow steps just like real walking
     val rawWeights = List(steps) { kotlin.random.Random.nextDouble(0.5, 1.5) }
     val sumWeights = rawWeights.sum()
 
-    // Calculate the exact nanoseconds the app was asleep.
-    // scales them to fit the exact total duration perfectly.
-    // This ensures Total Time is still mathematically correct for EXIF feature.
     val totalDurationNanos = Duration.between(startTime, endTime).toNanos()
     val baseUnitNanos = if (sumWeights > 0) totalDurationNanos / sumWeights else 1_000_000_000.0
 
@@ -48,40 +44,39 @@ fun extendTrail(
         val stepDurationNanos = (rawWeights[i] * baseUnitNanos).toLong()
 
         if (importedRoute.size > 1) {
-            // 1. Advance index in our current direction
             while (currentIndex >= 0 && currentIndex < importedRoute.size) {
-
-                // NEW: Force 1.5m accuracy for the ends, allow 5.0m corner-cutting for the middle
                 val isEndPoint = (currentIndex == 0 || currentIndex == importedRoute.size - 1)
                 val hitRadius = if (isEndPoint) 1.5 else 5.0
 
                 if (haversineMeters(lat, lon, importedRoute[currentIndex].lat, importedRoute[currentIndex].lon) < hitRadius) {
                     currentIndex += currentRouteDir
                 } else {
-                    break // We haven't reached this point yet, stop advancing!
+                    break
                 }
             }
 
-            // 2. Bounce at the ends of the array!
             if (currentIndex >= importedRoute.size) {
                 if (loopRouteContinuously) {
-                    currentIndex = 0 // Wrap instantly back to the start!
-                    currentRouteDir = 1 // Ensure we keep moving forward
+                    currentIndex = 0
+                    currentRouteDir = 1
                 } else if (loopRouteBackwards) {
-                    currentRouteDir = -1 // Reverse!
+                    currentRouteDir = -1
                     currentIndex = (importedRoute.size - 2).coerceAtLeast(0)
+                } else if (stopAtRouteEnd) {
+                    break // <--- 2. STOPS GENERATING WANDERING POINTS
                 }
             } else if (currentIndex < 0) {
                 if (loopRouteContinuously) {
-                    currentIndex = importedRoute.size - 1 // Wrap backwards (edge case)
+                    currentIndex = importedRoute.size - 1
                     currentRouteDir = -1
                 } else if (loopRouteBackwards) {
-                    currentRouteDir = 1 // Forward again!
+                    currentRouteDir = 1
                     currentIndex = 1.coerceAtMost(importedRoute.size - 1)
+                } else if (stopAtRouteEnd) {
+                    break // <--- 3. STOPS GENERATING WANDERING POINTS
                 }
             }
 
-            // 3. Aim at target
             if (currentIndex >= 0 && currentIndex < importedRoute.size) {
                 val target = importedRoute[currentIndex]
                 direction = calculateBearing(lat, lon, target.lat, target.lon)
@@ -92,8 +87,7 @@ fun extendTrail(
         } else {
             direction += (-10..10).random()
         }
-        // Translate the scalar distance (stride length) into vector coordinates (Lat/Lon).
-        // Longitude is scaled using cosine to account for Earth's curvature.
+
         val rad = Math.toRadians(direction)
         val metersPerDegLat = 111_320.0
         val metersPerDegLon = 111_320.0 * cos(Math.toRadians(lat))
@@ -101,12 +95,8 @@ fun extendTrail(
         lat += (stepLengthMeters / metersPerDegLat) * cos(rad)
         lon += (stepLengthMeters / metersPerDegLon) * sin(rad)
 
-
-        // Advance the timeline by this step's exact calculated duration
         currentTime = currentTime.plusNanos(stepDurationNanos)
-
         points.add(TrailPoint(lat, lon, currentTime))
-
     }
 
     return Triple(points, currentIndex, currentRouteDir)

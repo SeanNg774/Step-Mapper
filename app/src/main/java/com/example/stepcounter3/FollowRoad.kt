@@ -54,27 +54,59 @@ class RoadGraph {
     }
 }
 // This must run on a background thread!
-suspend fun fetchRoadGraph(centerLat: Double, centerLon: Double, radiusMeters: Int = 1000): RoadGraph {
+// This must run on a background thread!
+suspend fun fetchRoadGraph(centerLat: Double, centerLon: Double, radiusMeters: Int): RoadGraph {
     return withContext(Dispatchers.IO) {
         val graph = RoadGraph()
         try {
-            // 1. Build the specific Overpass Query (Ask for roads, not buildings)
+            // 1. The Smart City Query (Filters out highways and buildings)
             val query = """
-                [out:json];
-                way["highway"]["area"!~"yes"](around:$radiusMeters,$centerLat,$centerLon);
-                (._;>;);
-                out;
+                [out:json][timeout:45];
+(
+  way["highway"~"residential|path|footway|living_street|track|tertiary|unclassified|secondary|service|primary|trunk|motorway_link"](around:$radiusMeters,$centerLat,$centerLon);
+);
+(._;>;);
+out skel qt ; 
             """.trimIndent()
 
-            val encodedQuery = URLEncoder.encode(query, "UTF-8")
+
+            val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
             val urlString = "https://overpass-api.de/api/interpreter?data=$encodedQuery"
 
-            // 2. Fetch the map!
-            val response = URL(urlString).readText()
-            val jsonObject = JSONObject(response)
-            val elements = jsonObject.getJSONArray("elements")
+            // 2. Proper Android Network Connection
+            val url = java.net.URL(urlString)
+            val connection = url.openConnection() as java.net.HttpURLConnection
+            connection.requestMethod = "GET"
 
-            // 3. First Pass: Save all the raw coordinates (Nodes)
+            // ---> FIX: OVERPASS REQUIRES A USER-AGENT! <---
+            // Without this, they actively block your app and return "No roads found"
+            connection.setRequestProperty("User-Agent", "StepCounterFYP/1.0 (Android)")
+            connection.connectTimeout = 15000
+            connection.readTimeout = 35000
+
+            if (connection.responseCode != 200) {
+                android.util.Log.e("OverpassError", "Blocked: ${connection.responseCode}")
+                return@withContext graph // Silently fail so the UI can retry
+            }
+
+            // 3. Read and Parse JSON
+            val response = connection.inputStream.bufferedReader().use { it.readText() }
+            val jsonObject = org.json.JSONObject(response)
+            val elements = jsonObject.getJSONArray("elements")
+            android.util.Log.d("MapDebug", "Downloaded ${elements.length()} elements at $centerLat, $centerLon")
+
+// Add this:
+            if (elements.length() == 0) {
+                android.util.Log.e("MapDebug", "ABSOLUTE DEAD ZONE: No map data returned!")
+            } else {
+                // Check if we got any 'ways' (roads)
+                var wayCount = 0
+                for (i in 0 until elements.length()) {
+                    if (elements.getJSONObject(i).getString("type") == "way") wayCount++
+                }
+                android.util.Log.d("MapDebug", "Total ways found: $wayCount")
+            }
+            // First Pass: Nodes
             for (i in 0 until elements.length()) {
                 val element = elements.getJSONObject(i)
                 if (element.getString("type") == "node") {
@@ -85,27 +117,25 @@ suspend fun fetchRoadGraph(centerLat: Double, centerLon: Double, radiusMeters: I
                 }
             }
 
-            // 4. Second Pass: Connect the coordinates together (Ways/Edges)
+            // Second Pass: Edges
             for (i in 0 until elements.length()) {
                 val element = elements.getJSONObject(i)
                 if (element.getString("type") == "way") {
                     val wayId = element.getLong("id")
                     val nodesArray = element.getJSONArray("nodes")
-
-                    // Link each node to the one directly in front of it
                     for (j in 0 until nodesArray.length() - 1) {
                         val fromId = nodesArray.getLong(j)
                         val toId = nodesArray.getLong(j + 1)
-                        // This builds our intersections!
-                        graph.addEdge(fromId, toId, wayId)
+                        if (graph.nodes.containsKey(fromId) && graph.nodes.containsKey(toId)) {
+                            graph.addEdge(fromId, toId, wayId)}
                     }
                 }
             }
-
             return@withContext graph
+
         } catch (e: Exception) {
             e.printStackTrace()
-            return@withContext graph // Returns an empty graph if the internet fails
+            return@withContext graph
         }
     }
 }
