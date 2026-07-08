@@ -1337,18 +1337,6 @@ fun StepCounterScreen(
                             }) { Text("Change Route Behavior") }
                         }
 
-                        // Debug Button
-                        Button(
-                            onClick = {
-                                val ninetyMinutesInMillis = 90 * 60 * 1000L
-                                viewModel.sessionStartTime -= ninetyMinutesInMillis
-                                viewModel.lastCheckpointTime = viewModel.lastCheckpointTime.minusMinutes(90)
-                                viewModel.sessionStartSteps -= 2000
-                                viewModel.lastStepCheckpoint -= 2000
-                                Toast.makeText(context, "BOOM! Steps Injected.", Toast.LENGTH_SHORT).show()
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
-                        ) { Text("Inject 2k Steps & 1.5 Hrs") }
 
                     } else {
                         // --- IDLE MENU CONTROLS ---
