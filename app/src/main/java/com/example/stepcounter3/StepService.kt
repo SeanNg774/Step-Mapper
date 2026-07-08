@@ -67,10 +67,9 @@ class StepService : Service(), SensorEventListener {
             return START_NOT_STICKY
         }
 
-        // Start the "I am alive" notification
+        // Start the notification
         startForegroundService()
 
-        // Start listening to sensors
         stepSensor?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
         }

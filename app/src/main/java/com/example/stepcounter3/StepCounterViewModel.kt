@@ -27,6 +27,7 @@ import com.google.gson.JsonPrimitive
 import com.google.gson.JsonSerializer
 import java.time.format.DateTimeFormatter
 import com.google.gson.GsonBuilder
+import kotlin.math.abs
 
 enum class MapProvider { GOOGLE, OSM }
 
@@ -96,7 +97,22 @@ class StepCounterViewModel(
     var followRoadTargetNode by mutableStateOf(routePrefs.getLong("followRoadTargetNode", -1L))
     var followRoadLastNode by mutableStateOf(routePrefs.getLong("followRoadLastNode", -1L))
 
-    // ---> NEW: THE COMPASS MEMORY <---
+    private val MEMORY_SIZE = 5
+    private var recentNodes: MutableList<Long> = loadRecentNodesMemory()
+    private fun loadRecentNodesMemory(): MutableList<Long> {
+        val json = routePrefs.getString("recentNodesJson", "[]")
+        return try {
+            val type = object : TypeToken<MutableList<Long>>() {}.type
+            customGson.fromJson(json, type) ?: mutableListOf()
+        } catch (e: Exception) {
+            mutableListOf()
+        }
+    }
+    private fun saveRecentNodesMemory() {
+        val json = customGson.toJson(recentNodes)
+        routePrefs.edit { putString("recentNodesJson", json) }
+    }
+
     var lastRoadBearing by mutableStateOf(routePrefs.getFloat("lastRoadBearing", 0f).toDouble())
 
     var showStrideDialog by mutableStateOf(false)
@@ -109,7 +125,7 @@ class StepCounterViewModel(
     var currentQueueIndex by mutableStateOf(0)
     var manualTagIndex by mutableStateOf(0f)
     var isInitialized by mutableStateOf(false)
-    var currentMapProvider by mutableStateOf(MapProvider.GOOGLE)
+    var currentMapProvider by mutableStateOf(MapProvider.valueOf(routePrefs.getString("mapProvider", "GOOGLE") ?: "GOOGLE"))
 
     var mapChunkCenterLat by mutableStateOf(routePrefs.getFloat("chunkLat", 0f).toDouble())
     var mapChunkCenterLon by mutableStateOf(routePrefs.getFloat("chunkLon", 0f).toDouble())
@@ -154,12 +170,12 @@ class StepCounterViewModel(
     fun saveHistory(context: Context) {
         val prefs = context.getSharedPreferences("HistoryPrefs", Context.MODE_PRIVATE)
         val json = customGson.toJson(walkHistory)
-        prefs.edit().putString("walkHistoryJson", json).apply()
+        prefs.edit { putString("walkHistoryJson", json) }
     }
 
     fun updateTrailColor(newColor: Int) {
         trailColor = newColor
-        routePrefs.edit().putInt("trailColor", newColor).apply()
+        routePrefs.edit { putInt("trailColor", newColor) }
     }
 
     fun saveRouteBehavior(loopBackwards: Boolean, loopContinuously: Boolean) {
@@ -187,7 +203,7 @@ class StepCounterViewModel(
                 var splitIndex = -1
                 if (oldGpxEnd != null) {
                     for (i in liveTrail.indices.reversed()) {
-                        if (com.example.stepcounter3.haversineMeters(liveTrail[i].lat, liveTrail[i].lon, oldGpxEnd.lat, oldGpxEnd.lon) < 20.0) {
+                        if (haversineMeters(liveTrail[i].lat, liveTrail[i].lon, oldGpxEnd.lat, oldGpxEnd.lon) < 20.0) {
                             splitIndex = i
                             break
                         }
@@ -285,7 +301,7 @@ class StepCounterViewModel(
             val now = LocalDateTime.now()
 
             // ==========================================
-            // CATCH UP MODE (5km Sprints!)
+            // CATCH UP MODE
             // ==========================================
             if (stepsSinceCheckpoint > 50) {
                 val estimatedSeconds = (stepsSinceCheckpoint * 0.6).toLong()
@@ -319,8 +335,8 @@ class StepCounterViewModel(
                                 for (edge in neighbors) {
                                     val nNode = graph.nodes[edge.targetNodeId]
                                     if (nNode != null) {
-                                        val bearing = com.example.stepcounter3.calculateBearing(simLat, simLon, nNode.lat, nNode.lon)
-                                        var diff = Math.abs(bearing - lastRoadBearing)
+                                        val bearing = calculateBearing(simLat, simLon, nNode.lat, nNode.lon)
+                                        var diff = abs(bearing - lastRoadBearing)
                                         if (diff > 180) diff = 360 - diff
 
                                         if (diff < smallestTurn) {
@@ -350,15 +366,16 @@ class StepCounterViewModel(
                             isCalculatingMassiveRoute = true
                             lastStepCheckpoint += stepsSuccessfullySimulated
 
+
                             mapChunkCenterLat = simLat
                             mapChunkCenterLon = simLon
-                            routePrefs.edit()
-                                .putFloat("chunkLat", simLat.toFloat())
-                                .putFloat("chunkLon", simLon.toFloat())
-                                .putLong("followRoadCurrentNode", simCurrentId)
-                                .putLong("followRoadTargetNode", simTargetId)
-                                .putLong("followRoadLastNode", followRoadLastNode)
-                                .apply()
+                            routePrefs.edit {
+                                putFloat("chunkLat", simLat.toFloat())
+                                putFloat("chunkLon", simLon.toFloat())
+                                putLong("followRoadCurrentNode", simCurrentId)
+                                putLong("followRoadTargetNode", simTargetId)
+                                putLong("followRoadLastNode", followRoadLastNode)
+                            }
 
                             isDownloadingGraph = true
                             activeRoadGraph = null
@@ -390,12 +407,19 @@ class StepCounterViewModel(
                             pointToSaveLon = simLon
 
                             val connectedEdges = graph.adjacencyList[targetNode.id] ?: emptyList()
+                            if (!recentNodes.contains(simCurrentId)) {
+                                recentNodes.add(simCurrentId)
+                                if (recentNodes.size > MEMORY_SIZE) recentNodes.removeAt(0) // Keep it small
+
+                                saveRecentNodesMemory()
+                            }
+
                             val validNextEdges = connectedEdges.filter { it.targetNodeId != simCurrentId }
                             var nextEdge = validNextEdges.randomOrNull()
 
                             // ---> RAGGED EDGE DETECTOR <---
                             if (nextEdge == null) {
-                                val distFromChunkCenter = com.example.stepcounter3.haversineMeters(simLat, simLon, mapChunkCenterLat, mapChunkCenterLon)
+                                val distFromChunkCenter = haversineMeters(simLat, simLon, mapChunkCenterLat, mapChunkCenterLon)
 
                                 if (distFromChunkCenter >( currentChunkRadius * 0.85)) {
                                     // Fake map edge! DO NOT U-TURN! Download the next map right now!
@@ -410,13 +434,13 @@ class StepCounterViewModel(
 
                                     mapChunkCenterLat = simLat
                                     mapChunkCenterLon = simLon
-                                    routePrefs.edit()
-                                        .putFloat("chunkLat", simLat.toFloat())
-                                        .putFloat("chunkLon", simLon.toFloat())
-                                        .putLong("followRoadCurrentNode", simCurrentId)
-                                        .putLong("followRoadTargetNode", simTargetId)
-                                        .putLong("followRoadLastNode", followRoadLastNode)
-                                        .apply()
+                                    routePrefs.edit {
+                                        putFloat("chunkLat", simLat.toFloat())
+                                        putFloat("chunkLon", simLon.toFloat())
+                                        putLong("followRoadCurrentNode", simCurrentId)
+                                        putLong("followRoadTargetNode", simTargetId)
+                                        putLong("followRoadLastNode", followRoadLastNode)
+                                    }
 
                                     isDownloadingGraph = true
                                     activeRoadGraph = null
@@ -429,6 +453,9 @@ class StepCounterViewModel(
                                     return
                                 } else {
                                     // Real dead end. U-Turn allowed!
+                                    recentNodes.clear()
+
+                                    saveRecentNodesMemory()
                                     nextEdge = connectedEdges.randomOrNull()
                                 }
                             }
@@ -447,7 +474,7 @@ class StepCounterViewModel(
                             }
 
                         } else {
-                            val roadBearing = com.example.stepcounter3.calculateBearing(simLat, simLon, targetNode.lat, targetNode.lon)
+                            val roadBearing = calculateBearing(simLat, simLon, targetNode.lat, targetNode.lon)
                             lastRoadBearing = roadBearing // <--- SAVING THE COMPASS
 
                             val rad = Math.toRadians(roadBearing)
@@ -477,17 +504,19 @@ class StepCounterViewModel(
                     followRoadCurrentNode = simCurrentId
                     followRoadTargetNode = simTargetId
 
-                    routePrefs.edit()
-                        .putLong("followRoadCurrentNode", followRoadCurrentNode)
-                        .putLong("followRoadTargetNode", followRoadTargetNode)
-                        .putLong("followRoadLastNode", followRoadLastNode)
-                        .apply()
+                    routePrefs.edit {
+                        putLong("followRoadCurrentNode", followRoadCurrentNode)
+                        putLong("followRoadTargetNode", followRoadTargetNode)
+                        putLong("followRoadLastNode", followRoadLastNode)
+                    }
 
                     hiddenCatchUpBuffer.addAll(fastForwardPoints)
                     liveTrail = liveTrail + hiddenCatchUpBuffer // Push EVERYTHING to the map at once!
                     hiddenCatchUpBuffer.clear() // Wipe the buffer for next time
                     isCalculatingMassiveRoute = false // Turn off the loading UI
                     lastStepCheckpoint += stepsSuccessfullySimulated
+
+                    saveRecentNodesMemory()
 
                 } else {
                     val catchUpResult = com.example.stepcounter3.extendTrail(
@@ -502,10 +531,10 @@ class StepCounterViewModel(
                     routeTargetIndex = catchUpResult.second
                     routeDirection = catchUpResult.third
 
-                    routePrefs.edit()
-                        .putInt("savedRouteIndex", routeTargetIndex)
-                        .putInt("savedRouteDirection", routeDirection)
-                        .apply()
+                    routePrefs.edit {
+                        putInt("savedRouteIndex", routeTargetIndex)
+                        putInt("savedRouteDirection", routeDirection)
+                    }
 
                     liveTrail = liveTrail + missedPath
                     if (missedPath.isNotEmpty()) {
@@ -526,10 +555,10 @@ class StepCounterViewModel(
                         lastStepCheckpoint += missedPath.size
                         isFollowRoadMode = true
                         followRoadAfterGpx = false
-                        routePrefs.edit()
-                            .putBoolean("isFollowRoadMode", true)
-                            .putBoolean("followRoadAfterGpx", false)
-                            .apply()
+                        routePrefs.edit {
+                            putBoolean("isFollowRoadMode", true)
+                            putBoolean("followRoadAfterGpx", false)
+                        }
 
                         val startNode = activeRoadGraph?.nodes?.get(followRoadCurrentNode)
                         if (startNode != null) {
@@ -562,8 +591,8 @@ class StepCounterViewModel(
                                     for (edge in neighbors) {
                                         val nNode = graph.nodes[edge.targetNodeId]
                                         if (nNode != null) {
-                                            val bearing = com.example.stepcounter3.calculateBearing(currentLat, currentLon, nNode.lat, nNode.lon)
-                                            var diff = Math.abs(bearing - lastRoadBearing)
+                                            val bearing = calculateBearing(currentLat, currentLon, nNode.lat, nNode.lon)
+                                            var diff = abs(bearing - lastRoadBearing)
                                             if (diff > 180) diff = 360 - diff
                                             if (diff < smallestTurn) {
                                                 smallestTurn = diff
@@ -579,10 +608,10 @@ class StepCounterViewModel(
                         } else {
                             mapChunkCenterLat = currentLat
                             mapChunkCenterLon = currentLon
-                            routePrefs.edit()
-                                .putFloat("chunkLat", currentLat.toFloat())
-                                .putFloat("chunkLon", currentLon.toFloat())
-                                .apply()
+                            routePrefs.edit {
+                                putFloat("chunkLat", currentLat.toFloat())
+                                putFloat("chunkLon", currentLon.toFloat())
+                            }
                             isDownloadingGraph = true
                             activeRoadGraph = null
                             lastStepCheckpoint = totalSteps
@@ -592,7 +621,7 @@ class StepCounterViewModel(
 
                     val targetNode = graph.nodes[followRoadTargetNode]
                     if (targetNode != null) {
-                        val distToTarget = com.example.stepcounter3.haversineMeters(
+                        val distToTarget = haversineMeters(
                             currentLat, currentLon, targetNode.lat, targetNode.lon
                         )
 
@@ -602,6 +631,12 @@ class StepCounterViewModel(
 
 
                             val connectedEdges = graph.adjacencyList[targetNode.id] ?: emptyList()
+
+                            if (!recentNodes.contains(followRoadCurrentNode)) {
+                                recentNodes.add(followRoadCurrentNode)
+                                if (recentNodes.size > MEMORY_SIZE) recentNodes.removeAt(0)
+                            }
+                            saveRecentNodesMemory()
                             val validNextEdges = connectedEdges.filter { it.targetNodeId != followRoadCurrentNode }
                             var nextEdge = validNextEdges.randomOrNull()
 
@@ -612,15 +647,18 @@ class StepCounterViewModel(
                                 if (distFromChunkCenter > (currentChunkRadius *0.85)) {
                                     mapChunkCenterLat = currentLat
                                     mapChunkCenterLon = currentLon
-                                    routePrefs.edit()
-                                        .putFloat("chunkLat", currentLat.toFloat())
-                                        .putFloat("chunkLon", currentLon.toFloat())
-                                        .apply()
+                                    routePrefs.edit {
+                                        putFloat("chunkLat", currentLat.toFloat())
+                                        putFloat("chunkLon", currentLon.toFloat())
+                                    }
                                     isDownloadingGraph = true
                                     activeRoadGraph = null
                                     lastStepCheckpoint = totalSteps
                                     return
                                 } else {
+                                    recentNodes.clear()
+
+                                    saveRecentNodesMemory()
                                     nextEdge = connectedEdges.randomOrNull()
                                 }
                             }
@@ -631,16 +669,16 @@ class StepCounterViewModel(
                                 followRoadTargetNode = nextEdge.targetNodeId
                             }
 
-                            routePrefs.edit()
-                                .putLong("followRoadCurrentNode", followRoadCurrentNode)
-                                .putLong("followRoadTargetNode", followRoadTargetNode)
-                                .putLong("followRoadLastNode", followRoadLastNode)
-                                .apply()
+                            routePrefs.edit {
+                                putLong("followRoadCurrentNode", followRoadCurrentNode)
+                                putLong("followRoadTargetNode", followRoadTargetNode)
+                                putLong("followRoadLastNode", followRoadLastNode)
+                            }
 
                             liveTrail = liveTrail + TrailPoint(currentLat, currentLon, now)
                             lastCheckpointTime = now
                         } else {
-                            val roadBearing = com.example.stepcounter3.calculateBearing(
+                            val roadBearing = calculateBearing(
                                 currentLat, currentLon, targetNode.lat, targetNode.lon
                             )
                             lastRoadBearing = roadBearing // <--- SAVING THE COMPASS
@@ -669,10 +707,10 @@ class StepCounterViewModel(
 
                             if (haversineMeters(currentLat, currentLon, importedRoute[routeTargetIndex].lat, importedRoute[routeTargetIndex].lon) < hitRadius) {
                                 routeTargetIndex += routeDirection
-                                routePrefs.edit()
-                                    .putInt("savedRouteIndex", routeTargetIndex)
-                                    .putInt("savedRouteDirection", routeDirection)
-                                    .apply()
+                                routePrefs.edit {
+                                    putInt("savedRouteIndex", routeTargetIndex)
+                                    putInt("savedRouteDirection", routeDirection)
+                                }
                             } else break
                         }
 
@@ -686,10 +724,10 @@ class StepCounterViewModel(
                             } else if (followRoadAfterGpx) {
                                 isFollowRoadMode = true
                                 followRoadAfterGpx = false
-                                routePrefs.edit()
-                                    .putBoolean("isFollowRoadMode", true)
-                                    .putBoolean("followRoadAfterGpx", false)
-                                    .apply()
+                                routePrefs.edit {
+                                    putBoolean("isFollowRoadMode", true)
+                                    putBoolean("followRoadAfterGpx", false)
+                                }
                                 val startNode = activeRoadGraph?.nodes?.get(followRoadCurrentNode)
                                 if (startNode != null) {
                                     currentLat = startNode.lat
@@ -757,7 +795,7 @@ class StepCounterViewModel(
     }
 
     fun resumeSession(
-        context: android.content.Context,
+        context: Context,
         totalSteps: Int,
         initialTrail: List<TrailPoint>,
         initialSteps: Int,
@@ -775,21 +813,17 @@ class StepCounterViewModel(
             onShowToast("Walk a few steps to get a valid trail")
         } else {
             val startIntent = android.content.Intent(context, com.example.stepcounter3.StepService::class.java)
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                context.startForegroundService(startIntent)
-            } else {
-                context.startService(startIntent)
-            }
+            context.startForegroundService(startIntent)
 
             isSessionRunning = true
             sessionStartSteps = totalSteps - historySteps
             sessionStartTime = System.currentTimeMillis() - historyDuration
 
-            routePrefs.edit()
-                .putBoolean("isSessionRunning", true)
-                .putLong("sessionStartTime", sessionStartTime)
-                .putInt("sessionStartSteps", sessionStartSteps)
-                .apply()
+            routePrefs.edit {
+                putBoolean("isSessionRunning", true)
+                putLong("sessionStartTime", sessionStartTime)
+                putInt("sessionStartSteps", sessionStartSteps)
+            }
 
             if (historyTrail.size <= 1 && importedRoute.isNotEmpty() && routeTargetIndex > 0 && !isFollowRoadMode) {
                 val sessionStart = routePrefs.getInt("sessionStartIndex", 0)
@@ -847,7 +881,7 @@ class StepCounterViewModel(
     }
 
     fun initialize(
-        context: android.content.Context,
+        context: Context,
         defaultLat: Double,
         defaultLon: Double,
         initialTrail: List<TrailPoint>,
@@ -892,13 +926,13 @@ class StepCounterViewModel(
     }
 
     fun startSession(
-        context: android.content.Context,
+        context: Context,
         isNewWalk: Boolean,
         onClearSavedData: () -> Unit,
         onTrailUpdated: (List<TrailPoint>, Int, Long) -> Unit
     ) {
-        val startIntent = android.content.Intent(context, com.example.stepcounter3.StepService::class.java)
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+        val startIntent = android.content.Intent(context, StepService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(startIntent)
         } else {
             context.startService(startIntent)
@@ -952,7 +986,7 @@ class StepCounterViewModel(
     }
 
     fun endSession(
-        context: android.content.Context,
+        context: Context,
         onTrailUpdated: (List<TrailPoint>, Int, Long) -> Unit
     ) {
         val stopIntent = android.content.Intent(context, StepService::class.java)

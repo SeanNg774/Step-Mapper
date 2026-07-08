@@ -220,7 +220,7 @@ fun loadRouteFromInternalStorage(context: Context): List<TrailPoint> {
 }
 
 fun clearRouteFromInternalStorage(context: Context) {
-    val file = java.io.File(context.filesDir, "active_route.gpx")
+    val file = File(context.filesDir, "active_route.gpx")
     if (file.exists()) {
         file.delete()
     }

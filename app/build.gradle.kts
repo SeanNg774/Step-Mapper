@@ -15,9 +15,13 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = 1
-        versionName = "1.5.7"
+        versionName = "1.5.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
     }
 
 
@@ -82,4 +86,14 @@ dependencies {
     implementation("com.mikhaellopez:circularprogressbar:3.1.0")
     implementation("org.osmdroid:osmdroid-android:6.1.20")
     implementation("com.google.code.gson:gson:2.10.1")
+
+    testImplementation("junit:junit:4.13.2")
+
+    testImplementation("io.mockk:mockk:1.13.8")
+
+
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+
+
+    testImplementation("androidx.arch.core:core-testing:2.2.0")
 }

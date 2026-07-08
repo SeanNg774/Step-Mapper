@@ -95,7 +95,6 @@ out skel qt ;
             val elements = jsonObject.getJSONArray("elements")
             android.util.Log.d("MapDebug", "Downloaded ${elements.length()} elements at $centerLat, $centerLon")
 
-// Add this:
             if (elements.length() == 0) {
                 android.util.Log.e("MapDebug", "ABSOLUTE DEAD ZONE: No map data returned!")
             } else {
@@ -151,11 +150,11 @@ fun addNoiseToCoordinate(baseLat: Double, baseLon: Double, roadBearing: Double, 
     val latRad = Math.toRadians(baseLat)
     val lonRad = Math.toRadians(baseLon)
 
-    val newLatRad = kotlin.math.asin(kotlin.math.sin(latRad) * kotlin.math.cos(angularDistance) +
-            kotlin.math.cos(latRad) * kotlin.math.sin(angularDistance) * kotlin.math.cos(perpendicularBearing))
+    val newLatRad = kotlin.math.asin(sin(latRad) * cos(angularDistance) +
+            cos(latRad) * sin(angularDistance) *cos(perpendicularBearing))
 
-    val newLonRad = lonRad + kotlin.math.atan2(kotlin.math.sin(perpendicularBearing) * kotlin.math.sin(angularDistance) * kotlin.math.cos(latRad),
-        kotlin.math.cos(angularDistance) - kotlin.math.sin(latRad) * kotlin.math.sin(newLatRad))
+    val newLonRad = lonRad + kotlin.math.atan2(sin(perpendicularBearing) * sin(angularDistance) * kotlin.math.cos(latRad),
+        cos(angularDistance) - sin(latRad) * sin(newLatRad))
 
     return TrailPoint(Math.toDegrees(newLatRad), Math.toDegrees(newLonRad), java.time.LocalDateTime.now())
 }

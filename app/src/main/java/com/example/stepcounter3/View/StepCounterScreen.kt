@@ -85,6 +85,7 @@ import com.example.stepcounter3.MapProvider
 import java.io.File
 import org.osmdroid.views.overlay.Marker as OsmMarker
 import org.osmdroid.views.overlay.Polyline as OsmPolyline
+import androidx.core.graphics.toColorInt
 
 fun bitmapDescriptorFromVector(context: Context, vectorResId: Int): BitmapDescriptor? {
     val vectorDrawable = ContextCompat.getDrawable(context, vectorResId) ?: return null
@@ -105,6 +106,10 @@ fun LocationPickerScreen(
     startLat: Double,
     startLon: Double,
     lastRoadBearing: Double,
+    mapProvider: MapProvider,             // <--- NEW: Listen to ViewModel
+    mapType: MapType,                     // <--- NEW: Listen to ViewModel
+    onProviderToggle: () -> Unit,         // <--- NEW: Trigger ViewModel
+    onMapTypeToggle: () -> Unit,          // <--- NEW: Trigger ViewModel
     onBearingChanged: (Double) -> Unit,
     onLocationSelected: (Double, Double) -> Unit,
     onCancel: () -> Unit
@@ -113,19 +118,19 @@ fun LocationPickerScreen(
     var selectedPos by remember { mutableStateOf(LatLng(startLat, startLon)) }
     var latText by remember { mutableStateOf(startLat.toString()) }
     var lonText by remember { mutableStateOf(startLon.toString()) }
-    var currentMapType by remember { mutableStateOf(MapType.NORMAL) }
-    var currentMapProvider by remember { mutableStateOf(MapProvider.GOOGLE) }
+
+    // (Removed the local currentMapType and currentMapProvider variables)
 
     remember {
-        val osmConfig = org.osmdroid.config.Configuration.getInstance()
+        val osmConfig = Configuration.getInstance()
         osmConfig.load(context, context.getSharedPreferences("osm_prefs", Context.MODE_PRIVATE))
         osmConfig.userAgentValue = context.packageName
 
-        val basePath = java.io.File(context.cacheDir, "osmdroid")
+        val basePath = File(context.cacheDir, "osmdroid")
         basePath.mkdirs()
         osmConfig.osmdroidBasePath = basePath
 
-        val tileCache = java.io.File(osmConfig.osmdroidBasePath, "tile")
+        val tileCache = File(osmConfig.osmdroidBasePath, "tile")
         tileCache.mkdirs()
         osmConfig.osmdroidTileCache = tileCache
         true
@@ -159,36 +164,35 @@ fun LocationPickerScreen(
     Box(modifier = Modifier.fillMaxSize()) {
 
         // --- THE MAP SWITCHER ---
-        if (currentMapProvider == MapProvider.GOOGLE) {
+        if (mapProvider == MapProvider.GOOGLE) { // <--- USE PARAMETER
             GoogleMap(
                 modifier = Modifier.fillMaxSize(),
                 cameraPositionState = cameraPositionState,
                 onMapClick = { latLng -> updateFromMap(latLng) },
-                properties = MapProperties(mapType = currentMapType, isMyLocationEnabled = false)
+                properties = MapProperties(mapType = mapType, isMyLocationEnabled = false) // <--- USE PARAMETER
             ) {
                 Marker(
                     state = markerState,
                     title = "Selected Location",
-
                 )
             }
         } else {
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
-                    org.osmdroid.views.MapView(ctx).apply {
-                        setTileSource(org.osmdroid.tileprovider.tilesource.TileSourceFactory.MAPNIK)
+                    MapView(ctx).apply {
+                        setTileSource(TileSourceFactory.MAPNIK)
                         setMultiTouchControls(true)
                         zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER)
                         controller.setZoom(18.0)
-                        controller.setCenter(org.osmdroid.util.GeoPoint(selectedPos.latitude, selectedPos.longitude))
+                        controller.setCenter(GeoPoint(selectedPos.latitude, selectedPos.longitude))
 
                         val tapReceiver = object : org.osmdroid.events.MapEventsReceiver {
-                            override fun singleTapConfirmedHelper(p: org.osmdroid.util.GeoPoint): Boolean {
+                            override fun singleTapConfirmedHelper(p: GeoPoint): Boolean {
                                 updateFromMap(LatLng(p.latitude, p.longitude))
                                 return true
                             }
-                            override fun longPressHelper(p: org.osmdroid.util.GeoPoint): Boolean = false
+                            override fun longPressHelper(p: GeoPoint): Boolean = false
                         }
                         overlays.add(org.osmdroid.views.overlay.MapEventsOverlay(tapReceiver))
                     }
@@ -215,13 +219,13 @@ fun LocationPickerScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             IconButton(
-                onClick = { currentMapProvider = if (currentMapProvider == MapProvider.GOOGLE) MapProvider.OSM else MapProvider.GOOGLE },
+                onClick = onProviderToggle, // <--- TRIGGER CALLBACK
                 modifier = Modifier.background(Color.White.copy(alpha = 0.7f), shape = CircleShape)
             ) { Icon(Icons.Default.Map, "Switch Map Provider", tint = Color.Black) }
 
-            if (currentMapProvider == MapProvider.GOOGLE) {
+            if (mapProvider == MapProvider.GOOGLE) { // <--- USE PARAMETER
                 IconButton(
-                    onClick = { currentMapType = if (currentMapType == MapType.NORMAL) MapType.HYBRID else MapType.NORMAL },
+                    onClick = onMapTypeToggle, // <--- TRIGGER CALLBACK
                     modifier = Modifier.background(Color.White.copy(alpha = 0.7f), shape = CircleShape)
                 ) { Icon(Icons.Default.Layers, "Switch Map Type", tint = Color.Black) }
             }
@@ -255,8 +259,6 @@ fun LocationPickerScreen(
                 }
             }
         }
-
-
 
         // --- BOTTOM ACTION BUTTONS ---
         Row(
@@ -379,6 +381,7 @@ fun OsmMapView(
     )
 }
 
+@SuppressLint("UnrememberedMutableState")
 @Composable
 fun MapScreen(
     trail: List<TrailPoint>,
@@ -450,9 +453,9 @@ fun MapScreen(
                 cameraPositionState.animate(
                     update = CameraUpdateFactory.newLatLngZoom(
                         LatLng(startPoint.lat, startPoint.lon),
-                        18f // 18f is a nice tight zoom level
+                        18f
                     ),
-                    durationMs = 1500 // Smooth 1.5 second panning animation
+                    durationMs = 1500 // 1.5 second panning animation
                 )
             } else {
                 cameraPositionState.position =
@@ -476,7 +479,6 @@ fun MapScreen(
                 properties = MapProperties(mapType = mapType, isMyLocationEnabled = false),
                 onMapLoaded = { isMapLoaded = true }
             ) {
-                // ---> ONLY GOOGLE STUFF GOES IN HERE (Lines & Markers) <---
 
                 if (importedRoute.size > 1) {
                     Polyline(
@@ -489,7 +491,7 @@ fun MapScreen(
                 if (trail.size > 1) {
                     Polyline(
                         points = trail.map { LatLng(it.lat, it.lon) },
-                        color = androidx.compose.ui.graphics.Color(trailColor),
+                        color = Color(trailColor),
                         width = 10f
                     )
                 }
@@ -583,6 +585,7 @@ fun MapScreen(
                 }
             }
         }
+
     }
 
 }@RequiresApi(Build.VERSION_CODES.O)
@@ -727,7 +730,7 @@ fun StepCounterScreen(
             initialStride = initialStrideLength,
             sessionStartSteps = viewModel.sessionStartSteps,
 
-        )
+            )
         viewModel.loadHistory(context)
     }
 
@@ -761,8 +764,9 @@ fun StepCounterScreen(
             lastRoadBearing = viewModel.lastRoadBearing,
             onBearingChanged = { newBearing ->
                 viewModel.lastRoadBearing = newBearing
-                viewModel.routePrefs.edit().putFloat("lastRoadBearing", newBearing.toFloat())
-                    .apply()
+                viewModel.routePrefs.edit {
+                    putFloat("lastRoadBearing", newBearing.toFloat())
+                }
             },
             onLocationSelected = { lat, lon ->
                 // Update local state
@@ -784,7 +788,18 @@ fun StepCounterScreen(
                 // Optional: Clear any old trail if you want a fresh start
                 // viewModel.liveTrail = emptyList()
             },
-            onCancel = { viewModel.isPickingLocation = false }
+            onCancel = { viewModel.isPickingLocation = false },
+            onProviderToggle = {
+                val newProvider = if (viewModel.currentMapProvider == MapProvider.GOOGLE) MapProvider.OSM else MapProvider.GOOGLE
+                viewModel.currentMapProvider = newProvider
+                // ---> NEW: Save to hard drive <---
+                viewModel.routePrefs.edit { putString("mapProvider", newProvider.name) }
+            },
+            onMapTypeToggle = {
+                viewModel.currentMapType = if (viewModel.currentMapType == MapType.NORMAL) MapType.HYBRID else MapType.NORMAL
+            },
+            mapProvider = viewModel.currentMapProvider, // <--- SYNC WITH MAIN SCREEN
+            mapType = viewModel.currentMapType,         // <--- SYNC WITH MAIN SCREEN
         )
         return // Stop rendering the rest of the UI behind the map
     }
@@ -1021,7 +1036,7 @@ fun StepCounterScreen(
             onSyncStepBaseline = onSyncStepBaseline,
             onTrailUpdated = onTrailUpdated,
             sessionStartTime = viewModel.sessionStartTime
-            )
+        )
     }
 
 
@@ -1072,7 +1087,7 @@ fun StepCounterScreen(
     // Wrap the entire screen in the Drawer
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = !viewModel.isSessionRunning, // Prevent accidental swipes while walking
+        gesturesEnabled = drawerState.isOpen,
         drawerContent = {
             ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
                 Text(
@@ -1140,7 +1155,7 @@ fun StepCounterScreen(
 
 
                 val trailToUseForPreview =
-                    if (viewModel.lastSessionTrail.isNotEmpty()) viewModel.lastSessionTrail else viewModel.liveTrail
+                    viewModel.lastSessionTrail.ifEmpty { viewModel.liveTrail }
                 val currentPreviewPoint =
                     if (viewModel.showUnmatchedDialog && trailToUseForPreview.isNotEmpty()) {
                         // Grab the exact coordinate matching the current slider index
@@ -1168,12 +1183,10 @@ fun StepCounterScreen(
                         previewMarkerPoint = currentPreviewPoint,
                         mapProvider = viewModel.currentMapProvider,
                         onProviderToggle = {
-                            viewModel.currentMapProvider =
-                                if (viewModel.currentMapProvider == MapProvider.GOOGLE) {
-                                    MapProvider.OSM
-                                } else {
-                                    MapProvider.GOOGLE
-                                }
+                            val newProvider = if (viewModel.currentMapProvider == MapProvider.GOOGLE) MapProvider.OSM else MapProvider.GOOGLE
+                            viewModel.currentMapProvider = newProvider
+                            // ---> NEW: Save to hard drive <---
+                            viewModel.routePrefs.edit { putString("mapProvider", newProvider.name) }
                         },
                         trailColor = viewModel.trailColor,
                         onColorPickerClick = {
@@ -1182,437 +1195,263 @@ fun StepCounterScreen(
                         currentLat = viewModel.currentLat, // <--- NEW
                         currentLon = viewModel.currentLon  // <--- NEW
                     )
-                if (!viewModel.isSessionRunning) {
-                    IconButton(
-                        onClick = {
-                            // This physically opens the drawer when clicked!
-                            scope.launch { drawerState.open() }
-                        },
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(16.dp)
-                            .background(
-                                color = Color.White.copy(alpha = 0.8f),
-                                shape = CircleShape
+                    if (!viewModel.isSessionRunning) {
+                        IconButton(
+                            onClick = {
+                                // This physically opens the drawer when clicked!
+                                scope.launch { drawerState.open() }
+                            },
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(16.dp)
+                                .background(
+                                    color = Color.White.copy(alpha = 0.8f),
+                                    shape = CircleShape
+                                )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Menu,
+                                contentDescription = "Open Walk History",
+                                tint = Color.Black
                             )
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Menu,
-                            contentDescription = "Open Walk History",
-                            tint = Color.Black
-                        )
+                        }
                     }
                 }
-            }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
                 if (!viewModel.showUnmatchedDialog) {
 
-
-                    //  Session info while running
+                    // =========================================================
+                    // 1. DYNAMIC TOP SECTION: Stats (Live or Last Session)
+                    // =========================================================
                     if (viewModel.isSessionRunning) {
+                        // --- LIVE STATS (Active State) ---
                         if (viewModel.isCalculatingMassiveRoute) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp
-                                )
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    "Calculating route...",
-                                    color = MaterialTheme.colorScheme.primary
-                                )
+                                Text("Calculating route...", color = MaterialTheme.colorScheme.primary)
                             }
                             Spacer(modifier = Modifier.height(4.dp))
                         }
-
                         Text("Steps: $sessionSteps", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "Distance: %.3f km".format(distanceKm),
-                            style = MaterialTheme.typography.bodyLarge
+                        Text("Distance: %.3f km".format(distanceKm), style = MaterialTheme.typography.bodyLarge)
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                    } else {
+                        // --- LAST SESSION STATS (Idle State) ---
+                        if (viewModel.lastSessionSteps > 0) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                shape = MaterialTheme.shapes.medium,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("Last Session", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text("Steps: ${viewModel.lastSessionSteps}", style = MaterialTheme.typography.bodyLarge)
+                                    Text("Distance: %.3f km".format(viewModel.lastSessionDistance), style = MaterialTheme.typography.bodyLarge)
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(16.dp))
+                        }
+                    }
+
+                    // =========================================================
+                    // 2. PRIMARY CONTROLS: Start & End Buttons (Always visible)
+                    // =========================================================
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Button(
+                            enabled = !viewModel.isSessionRunning,
+                            onClick = {
+                                val hasPreviousData = (viewModel.resumePoint != null && (viewModel.totalSteps > 0 || initialSteps > 0)) || viewModel.lastSessionSteps > 0
+                                if (hasPreviousData) {
+                                    viewModel.showOverwriteDialog = true
+                                } else {
+                                    executeStartFlow()
+                                }
+                            }
+                        ) { Text("Start") }
+
+                        Button(
+                            enabled = viewModel.isSessionRunning && !viewModel.isGeneratingTrail && !viewModel.isDownloadingGraph && !viewModel.isCalculatingMassiveRoute,
+                            onClick = { viewModel.endSession(context = context, onTrailUpdated = onTrailUpdated) }
+                        ) {
+                            if (viewModel.isGeneratingTrail) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Finalizing...")
+                            } else if (viewModel.isDownloadingGraph || viewModel.isCalculatingMassiveRoute) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Wait...")
+                            } else {
+                                Text("End")
+                            }
+                        }
+                    }
+
+                    if (viewModel.showOverwriteDialog) {
+                        AlertDialog(
+                            onDismissRequest = { viewModel.showOverwriteDialog = false },
+                            title = { Text("Start New Walk?") },
+                            text = { Text("Starting a new walk will clear your previous un-exported trail. Are you sure you want to overwrite it?") },
+                            confirmButton = {
+                                Button(
+                                    onClick = {
+                                        viewModel.showOverwriteDialog = false
+                                        executeStartFlow()
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                                ) { Text("Overwrite & Start") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { viewModel.showOverwriteDialog = false }) { Text("Cancel") }
+                            }
                         )
                     }
-                    //  Last session info after ending
-                    // Last session info after ending
-                    if (!viewModel.isSessionRunning && viewModel.lastSessionSteps > 0) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = MaterialTheme.shapes.medium,
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(16.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text(
-                                    text = "Last Session",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    "Steps: ${viewModel.lastSessionSteps}",
-                                    style = MaterialTheme.typography.bodyLarge
-                                )
-                                Text(
-                                    "Distance: %.3f km".format(viewModel.lastSessionDistance),
-                                    style = MaterialTheme.typography.bodyLarge
-                                )
-                            }
-                        }
 
-                    }
+                    Spacer(modifier = Modifier.height(16.dp))
 
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        // ---> FIX: Move the Start Flow ABOVE the Row so the Dialog can see it! <---
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-
-                            // ---> UPDATED START BUTTON <---
-                            Button(
-                                enabled = !viewModel.isSessionRunning,
-                                onClick = {
-                                    // Check if there is existing data that would be wiped
-                                    val hasPreviousData =
-                                        (viewModel.resumePoint != null && (viewModel.totalSteps > 0 || initialSteps > 0)) || viewModel.lastSessionSteps > 0
-
-                                    if (hasPreviousData) {
-                                        // Trigger the safety net!
-                                        viewModel.showOverwriteDialog = true
-                                    } else {
-                                        // No previous walk, just start normally!
-                                        executeStartFlow()
-                                    }
-                                }
-                            ) { Text("Start") }
-
-
-                            Button(
-                                // ---> FIX: Disable button if ANY background task is running <---
-                                enabled = viewModel.isSessionRunning &&
-                                        !viewModel.isGeneratingTrail &&
-                                        !viewModel.isDownloadingGraph &&
-                                        !viewModel.isCalculatingMassiveRoute,
-                                onClick = {
-                                    viewModel.endSession(
-                                        context = context,
-                                        onTrailUpdated = onTrailUpdated
-                                    )
-                                }
-                            ) {
-                                if (viewModel.isGeneratingTrail) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(20.dp),
-                                        color = MaterialTheme.colorScheme.onPrimary,
-                                        strokeWidth = 2.dp
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Finalizing...")
-                                }
-                                // ---> FIX: Show the user WHY they can't click it yet <---
-                                else if (viewModel.isDownloadingGraph || viewModel.isCalculatingMassiveRoute) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(20.dp),
-                                        color = MaterialTheme.colorScheme.onPrimary,
-                                        strokeWidth = 2.dp
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Wait...")
-                                } else {
-                                    Text("End")
-                                }
-                            }
-                        }
-
-                        // ---> THE SAFETY NET DIALOG <---
-                        if (viewModel.showOverwriteDialog) {
-                            AlertDialog(
-                                onDismissRequest = { viewModel.showOverwriteDialog = false },
-                                title = { Text("Start New Walk?") },
-                                text = { Text("Starting a new walk will clear your previous un-exported trail. Are you sure you want to overwrite it?") },
-                                confirmButton = {
-                                    Button(
-                                        onClick = {
-                                            viewModel.showOverwriteDialog = false
-                                            executeStartFlow() // Proceed with wiping and starting!
-                                        },
-                                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                                    ) {
-                                        Text("Overwrite & Start")
-                                    }
-                                },
-                                dismissButton = {
-                                    TextButton(onClick = {
-                                        viewModel.showOverwriteDialog = false
-                                    }) {
-                                        Text("Cancel")
-                                    }
-                                }
-                            )
-                        }
-                    }
-
+                    // =========================================================
+                    // 3. SECONDARY CONTROLS (Split by State)
+                    // =========================================================
                     if (viewModel.isSessionRunning) {
-                        Button(
-                            onClick = {
-                                // 1. URL-Encode the label to prevent strict apps (like Earth) from crashing
-                                val label = Uri.encode("Current Location")
-
-                                // 2. Use the official Android standard for dropping a pin.
-                                // Google explicitly recommends using "geo:0,0" and putting the actual coordinates in the "q" parameter.
-                                val gmmIntentUri =
-                                    "geo:${viewModel.currentLat},${viewModel.currentLon}?q=${viewModel.currentLat},${viewModel.currentLon}".toUri()
-                                val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
-
-                                // 3. Launch the intent
-                                if (mapIntent.resolveActivity(context.packageManager) != null) {
-                                    context.startActivity(mapIntent)
-                                } else {
-                                    Toast.makeText(
-                                        context,
-                                        "No map application installed",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                }
+                        // --- ACTIVE WORKOUT CONTROLS ---
+                        Button(onClick = {
+                            val gmmIntentUri = "geo:${viewModel.currentLat},${viewModel.currentLon}?q=${viewModel.currentLat},${viewModel.currentLon}".toUri()
+                            val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
+                            if (mapIntent.resolveActivity(context.packageManager) != null) {
+                                context.startActivity(mapIntent)
+                            } else {
+                                Toast.makeText(context, "No map application installed", Toast.LENGTH_SHORT).show()
                             }
-                        ) {
-                            Text("Look up current location")
-                        }
-
-
-
+                        }) { Text("Look up current location") }
 
                         if (viewModel.importedRoute.isNotEmpty()) {
                             Spacer(modifier = Modifier.height(8.dp))
-                            OutlinedButton(
-                                onClick = {
-                                    // 1. Ensure we don't accidentally restart the session
-                                    viewModel.pendingSessionAction = null
-                                    // 2. Pop the dialog open!
-                                    viewModel.showRouteModeDialog = true
-                                }
-                            ) {
-                                Text("Change Route Behavior")
-                            }
+                            OutlinedButton(onClick = {
+                                viewModel.pendingSessionAction = null
+                                viewModel.showRouteModeDialog = true
+                            }) { Text("Change Route Behavior") }
                         }
 
-
-                    }
-
-
-
-
-
-
-                    if (!viewModel.isSessionRunning && viewModel.resumePoint != null ) {
+                        // Debug Button
                         Button(
                             onClick = {
+                                val ninetyMinutesInMillis = 90 * 60 * 1000L
+                                viewModel.sessionStartTime -= ninetyMinutesInMillis
+                                viewModel.lastCheckpointTime = viewModel.lastCheckpointTime.minusMinutes(90)
+                                viewModel.sessionStartSteps -= 2000
+                                viewModel.lastStepCheckpoint -= 2000
+                                Toast.makeText(context, "BOOM! Steps Injected.", Toast.LENGTH_SHORT).show()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+                        ) { Text("Inject 2k Steps & 1.5 Hrs") }
 
+                    } else {
+                        // --- IDLE MENU CONTROLS ---
+                        if (viewModel.resumePoint != null) {
+                            Button(onClick = {
                                 viewModel.resumeSession(
-                                    context = context,
-                                    totalSteps = viewModel.totalSteps,
-                                    initialTrail = initialTrail,
-                                    initialSteps = initialSteps,
-                                    initialDuration = initialDuration,
-                                    onClearSavedData = onClearSavedData,
-                                    onTrailUpdated = onTrailUpdated,
-                                    onShowToast = { msg ->
-                                        Toast.makeText(
-                                            context,
-                                            msg,
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    }
+                                    context = context, totalSteps = viewModel.totalSteps, initialTrail = initialTrail,
+                                    initialSteps = initialSteps, initialDuration = initialDuration,
+                                    onClearSavedData = onClearSavedData, onTrailUpdated = onTrailUpdated,
+                                    onShowToast = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
                                 )
-                            }
-                        ) { Text(" Resume from Last Trail") }
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-                    if (!viewModel.isSessionRunning) {
+                            }) { Text(" Resume from Last Trail") }
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
 
-                        // ---> NEW: Check if a route is currently loaded <---
                         val hasImportedRoute = viewModel.importedRoute.isNotEmpty()
-
                         Button(
                             onClick = {
-                                // ---> NEW: Intercept the click! <---
                                 if (hasImportedRoute) {
                                     Toast.makeText(context, "Route needs to be cleared first", Toast.LENGTH_SHORT).show()
                                 } else {
                                     viewModel.isPickingLocation = true
                                 }
                             },
-                            // ---> NEW: Manually grey it out if there is a route <---
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (hasImportedRoute) Color.LightGray else MaterialTheme.colorScheme.primary,
                                 contentColor = if (hasImportedRoute) Color.DarkGray else MaterialTheme.colorScheme.onPrimary
                             )
-                        ) {
-                            Text(" Set Start Location")
-                        }
+                        ) { Text(" Set Start Location") }
+
                         Spacer(modifier = Modifier.height(8.dp))
-                    }
 
-                    if (!viewModel.isSessionRunning) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            if (viewModel.importedRoute.isEmpty()) {
-                                // Button 1: Load Route
-                                Button(
-                                    onClick = {
-                                        // Launch the Android file explorer
-                                        gpxPickerLauncher.launch(arrayOf("*/*"))
-                                    },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("Load Route")
-                                }
-                            }
-
-                            // Button 2: Only show if a route is currently active
-                            if (viewModel.importedRoute.isNotEmpty()) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            if (!hasImportedRoute) {
+                                Button(onClick = { gpxPickerLauncher.launch(arrayOf("*/*")) }, modifier = Modifier.weight(1f)) { Text("Load Route") }
+                            } else {
                                 OutlinedButton(
                                     onClick = {
-                                        // 1. Wipe the UI state
                                         viewModel.clearRoute(context)
-                                        Toast.makeText(
-                                            context,
-                                            "Route cleared!",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
+                                        Toast.makeText(context, "Route cleared!", Toast.LENGTH_SHORT).show()
                                     },
                                     modifier = Modifier.weight(1f),
                                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                                ) {
-                                    Text("Clear Route")
-                                }
+                                ) { Text("Clear Route") }
                             }
                         }
 
-                    }
+                        if (viewModel.lastSessionTrail.isNotEmpty() || initialTrail.isNotEmpty()) {
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+                            Text("Hold on photo to select multiple", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 4.dp))
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                Button(
+                                    onClick = {
+                                        viewModel.isManualTagMode = false
+                                        photoPickerLauncher.launch(arrayOf("image/*"))
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                ) { Text("Auto-Tag Photos") }
 
-
-                    if (!viewModel.isSessionRunning && (viewModel.lastSessionTrail.isNotEmpty() || initialTrail.isNotEmpty())) {
-
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Text(
-                            text = "Hold on photo to select multiple",
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(bottom = 4.dp)
-                        )
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            Button(
-                                onClick = {
-                                    viewModel.isManualTagMode = false // Use EXIF
-                                    photoPickerLauncher.launch(arrayOf("image/*"))
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("Auto-Tag Photos")
+                                Button(
+                                    onClick = {
+                                        viewModel.isManualTagMode = true
+                                        photoPickerLauncher.launch(arrayOf("image/*"))
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                ) { Text("Manual Placement") }
                             }
-
-                            Button(
-                                onClick = {
-                                    viewModel.isManualTagMode =
-                                        true // Bypass EXIF, go straight to slider
-                                    photoPickerLauncher.launch(arrayOf("image/*"))
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("Manual Placement")
-                            }
+                            Spacer(modifier = Modifier.height(16.dp))
                         }
-                        // ---------------------------------
-                    }
 
-
-                    if (!viewModel.isSessionRunning) {
-                        Button(
-                            onClick = {
+                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Button(onClick = {
                                 if (exportTrail.isNotEmpty()) {
-                                    val gpx = buildGpxXml(
-                                        points = exportTrail,
-                                        name = "Indoor Walk"
-                                    )
-
-                                    val savedUri = saveGpxToDownloads(
-                                        context = context,
-                                        fileName = "indoor_walk_${System.currentTimeMillis()}.gpx",
-                                        gpxData = gpx
-                                    )
-                                    if (savedUri != null) {
-                                        shareGpxFile(context, savedUri)
-                                    }
-
-                                }
-
-                            }
-                        ) {
-                            Text("Download & Share GPX")
-                        }
-                        Button(
-                            onClick = {
-                                if (exportTrail.isNotEmpty()) {
-                                    val gpx =
-                                        buildGpxXml(points = exportTrail, name = "Indoor Walk")
-                                    val savedUri = saveGpxToDownloads(
-                                        context = context,
-                                        fileName = "indoor_walk_${System.currentTimeMillis()}.gpx",
-                                        gpxData = gpx
-                                    )
-
-                                    if (savedUri != null) {
-                                        Toast.makeText(
-                                            context,
-                                            "GPX saved to Downloads!",
-                                            Toast.LENGTH_LONG
-                                        ).show()
-                                    }
+                                    val gpx = buildGpxXml(points = exportTrail, name = "Indoor Walk")
+                                    val savedUri = saveGpxToDownloads(context = context, fileName = "indoor_walk_${System.currentTimeMillis()}.gpx", gpxData = gpx)
+                                    if (savedUri != null) shareGpxFile(context, savedUri)
                                 } else {
-                                    // 2. Prevent opening the browser if there's nothing to upload
-                                    Toast.makeText(
-                                        context,
-                                        "No trail to upload!",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                    return@Button
+                                    Toast.makeText(context, "No trail to export!", Toast.LENGTH_SHORT).show()
                                 }
+                            }) { Text("Share GPX") }
 
-                                val intent = Intent(
-                                    Intent.ACTION_VIEW,
-                                    "https://www.strava.com/upload/select".toUri()
-                                )
-                                context.startActivity(intent)
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = androidx.compose.ui.graphics.Color(
-                                    0xFFFC4C02
-                                )
-                            )
-                        ) {
-                            Text("Upload to Strava")
-                        }
-                    }
-
-
-                    if (!viewModel.isSessionRunning) {
-                        Button(
-                            onClick = { viewModel.showStrideDialog = true }
-                        ) {
-                            Text("Set Stride Length (default =0.7m)")
+                            Button(
+                                onClick = {
+                                    if (exportTrail.isNotEmpty()) {
+                                        val gpx = buildGpxXml(points = exportTrail, name = "Indoor Walk")
+                                        val savedUri = saveGpxToDownloads(context = context, fileName = "indoor_walk_${System.currentTimeMillis()}.gpx", gpxData = gpx)
+                                        if (savedUri != null) {
+                                            Toast.makeText(context, "GPX saved to Downloads!", Toast.LENGTH_LONG).show()
+                                            val intent = Intent(Intent.ACTION_VIEW, "https://www.strava.com/upload/select".toUri())
+                                            context.startActivity(intent)
+                                        }
+                                    } else {
+                                        Toast.makeText(context, "No trail to upload!", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFC4C02))
+                            ) { Text("Upload to Strava") }
                         }
 
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(onClick = { viewModel.showStrideDialog = true }) { Text("Set Stride Length (default = 0.7m)") }
                     }
+                }
                     if (viewModel.showStrideDialog) {
                         var textValue by remember { mutableStateOf(viewModel.strideLength.toString()) }
 
@@ -1848,10 +1687,10 @@ fun StepCounterScreen(
                                         var downloadedGraph = withContext(Dispatchers.IO)
                                         {
                                             fetchRoadGraph(
-                                            centerLat = viewModel.currentLat,
-                                            centerLon = viewModel.currentLon,
-                                            radiusMeters = successfulRadius
-                                        )
+                                                centerLat = viewModel.currentLat,
+                                                centerLon = viewModel.currentLon,
+                                                radiusMeters = successfulRadius
+                                            )
                                         }
                                         if (downloadedGraph.nodes.size < 20) {
                                             successfulRadius = 2000
@@ -1873,7 +1712,12 @@ fun StepCounterScreen(
                                             viewModel.currentChunkRadius = successfulRadius
                                             viewModel.mapChunkCenterLat = viewModel.currentLat
                                             viewModel.mapChunkCenterLon = viewModel.currentLon
-                                            routePrefs.edit().putInt("chunkRadius", successfulRadius).apply()
+                                            routePrefs.edit {
+                                                putInt(
+                                                    "chunkRadius",
+                                                    successfulRadius
+                                                )
+                                            }
 
                                             val connectedRoads = downloadedGraph.adjacencyList[startIntersection.id] ?: emptyList()
 
@@ -2159,8 +2003,9 @@ fun StepCounterScreen(
                                             endPoint.lon
                                         )
                                         viewModel.currentChunkRadius = successfulRadius
-                                        routePrefs.edit().putInt("chunkRadius", successfulRadius)
-                                            .apply()
+                                        routePrefs.edit {
+                                            putInt("chunkRadius", successfulRadius)
+                                        }
                                         if (startIntersection != null) {
                                             viewModel.currentChunkRadius = successfulRadius
 
@@ -2249,9 +2094,9 @@ fun StepCounterScreen(
                 val colorOptions = listOf(
                     "Blue" to android.graphics.Color.BLUE,
                     "Red" to android.graphics.Color.RED,
-                    "Green" to android.graphics.Color.parseColor("#008000"), // Darker Green
-                    "Purple" to android.graphics.Color.parseColor("#800080"),
-                    "Orange" to android.graphics.Color.parseColor("#FFA500"),
+                    "Green" to "#008000".toColorInt(), // Darker Green
+                    "Purple" to "#800080".toColorInt(),
+                    "Orange" to "#FFA500".toColorInt(),
                     "Black" to android.graphics.Color.BLACK
                 )
 
@@ -2272,7 +2117,7 @@ fun StepCounterScreen(
                                         modifier = Modifier
                                             .size(24.dp)
                                             .background(
-                                                androidx.compose.ui.graphics.Color(
+                                                Color(
                                                     colorValue
                                                 ), CircleShape
                                             )
@@ -2302,4 +2147,3 @@ fun StepCounterScreen(
             }
         }
     }
-}
