@@ -112,7 +112,7 @@ fun parseGpxFile(inputStream: InputStream): List<TrailPoint> {
     val points = mutableListOf<TrailPoint>()
     val parser: XmlPullParser = Xml.newPullParser()
 
-    // 1. Create our Synthetic Timer (Starts exactly right now)
+    //Synthetic time
     var fallbackTime = LocalDateTime.now()
 
     try {
@@ -154,7 +154,6 @@ fun parseGpxFile(inputStream: InputStream): List<TrailPoint> {
 
                         if (currentLat != null && currentLon != null) {
 
-                            // --- SYNTHETIC TIMESTAMP LOGIC ---
                             val finalTime = if (!currentParsedTime.isNullOrBlank()) {
                                 try {
                                     // Try to parse the real timestamp (Works for Strava/Garmin files)
@@ -166,7 +165,7 @@ fun parseGpxFile(inputStream: InputStream): List<TrailPoint> {
                                     tempTime
                                 }
                             } else {
-                                // 3. NO TIME TAG FOUND! (Internet drawn route). Inject synthetic time!
+                                // NO TIME TAG FOUND . Inject synthetic time
                                 val tempTime = fallbackTime
                                 fallbackTime = fallbackTime.plusSeconds(1)
                                 tempTime

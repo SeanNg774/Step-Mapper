@@ -22,7 +22,7 @@ fun extendTrail(
     loopRouteBackwards: Boolean = false,
     loopRouteContinuously: Boolean = false,
     initialRouteDirection: Int = 1,
-    stopAtRouteEnd: Boolean = false // <--- 1. NEW PARAMETER
+    stopAtRouteEnd: Boolean = false
 ): Triple<List<TrailPoint>, Int, Int > {
 
     if (steps <= 0) return Triple(emptyList(), startingWaypointIndex, initialRouteDirection)
@@ -63,7 +63,7 @@ fun extendTrail(
                     currentRouteDir = -1
                     currentIndex = (importedRoute.size - 2).coerceAtLeast(0)
                 } else if (stopAtRouteEnd) {
-                    break // <--- 2. STOPS GENERATING WANDERING POINTS
+                    break
                 }
             } else if (currentIndex < 0) {
                 if (loopRouteContinuously) {
@@ -73,7 +73,7 @@ fun extendTrail(
                     currentRouteDir = 1
                     currentIndex = 1.coerceAtMost(importedRoute.size - 1)
                 } else if (stopAtRouteEnd) {
-                    break // <--- 3. STOPS GENERATING WANDERING POINTS
+                    break
                 }
             }
 

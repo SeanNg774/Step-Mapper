@@ -355,7 +355,7 @@ class StepCounterViewModel(
                     while (remainingDistance > 0) {
 
                         // ---> MASTER EDGE DETECTOR <---
-                        val distFromChunk = com.example.stepcounter3.haversineMeters(simLat, simLon, mapChunkCenterLat, mapChunkCenterLon)
+                        val distFromChunk = haversineMeters(simLat, simLon, mapChunkCenterLat, mapChunkCenterLon)
                         if (distFromChunk > (currentChunkRadius * 0.9)) {
                             currentLat = simLat
                             currentLon = simLon
@@ -385,7 +385,7 @@ class StepCounterViewModel(
                             val currentDuration = System.currentTimeMillis() - sessionStartTime
                             val currentSessionSteps = totalSteps - sessionStartSteps
                             onTrailUpdated(liveTrail, currentSessionSteps, currentDuration)
-                            return // Exit safely, let the UI download!
+                            return
                         }
 
                         val targetNode = graph.nodes[simTargetId]
@@ -519,7 +519,7 @@ class StepCounterViewModel(
                     saveRecentNodesMemory()
 
                 } else {
-                    val catchUpResult = com.example.stepcounter3.extendTrail(
+                    val catchUpResult = extendTrail(
                         startLat = currentLat, startLon = currentLon, startTime = lastCheckpointTime,
                         steps = stepsSinceCheckpoint, stepLengthMeters = strideLength, endTime = finalEndTime,
                         importedRoute = importedRoute, startingWaypointIndex = routeTargetIndex,
@@ -541,10 +541,10 @@ class StepCounterViewModel(
                         val last = missedPath.last()
                         if (missedPath.size > 1) {
                             val secondLast = missedPath[missedPath.size - 2]
-                            lastRoadBearing = com.example.stepcounter3.calculateBearing(secondLast.lat, secondLast.lon, last.lat, last.lon)
+                            lastRoadBearing = calculateBearing(secondLast.lat, secondLast.lon, last.lat, last.lon)
                         } else if (liveTrail.size > 1) {
                             val secondLast = liveTrail[liveTrail.size - 2]
-                            lastRoadBearing = com.example.stepcounter3.calculateBearing(secondLast.lat, secondLast.lon, last.lat, last.lon)
+                            lastRoadBearing = calculateBearing(secondLast.lat, secondLast.lon, last.lat, last.lon)
                         }
                         currentLat = last.lat
                         currentLon = last.lon
@@ -642,7 +642,7 @@ class StepCounterViewModel(
 
                             // ---> RAGGED EDGE DETECTOR (Normal Mode) <---
                             if (nextEdge == null) {
-                                val distFromChunkCenter = com.example.stepcounter3.haversineMeters(currentLat, currentLon, mapChunkCenterLat, mapChunkCenterLon)
+                                val distFromChunkCenter = haversineMeters(currentLat, currentLon, mapChunkCenterLat, mapChunkCenterLon)
 
                                 if (distFromChunkCenter > (currentChunkRadius *0.85)) {
                                     mapChunkCenterLat = currentLat
@@ -747,7 +747,7 @@ class StepCounterViewModel(
 
                         if (routeTargetIndex >= 0 && routeTargetIndex < importedRoute.size) {
                             val target = importedRoute[routeTargetIndex]
-                            walkingDirection = com.example.stepcounter3.calculateBearing(
+                            walkingDirection = calculateBearing(
                                 currentLat, currentLon, target.lat, target.lon
                             )
                             walkingDirection += (-2..2).random()
@@ -849,7 +849,7 @@ class StepCounterViewModel(
         }
     }
 
-    fun clearRoute(context: android.content.Context) {
+    fun clearRoute(context: Context) {
         importedRoute = emptyList()
         routeTargetIndex = 0
         loopRouteBackwards = false
@@ -918,7 +918,7 @@ class StepCounterViewModel(
             if (currentBaseline == 0 || (System.currentTimeMillis() - sessionStartTime < 2000)) {
                 if (steps > currentBaseline) {
                     sessionStartSteps = steps
-                    routePrefs.edit().putInt("sessionStartSteps", steps).apply()
+                    routePrefs.edit { putInt("sessionStartSteps", steps) }
                 }
             }
         }
@@ -932,11 +932,7 @@ class StepCounterViewModel(
         onTrailUpdated: (List<TrailPoint>, Int, Long) -> Unit
     ) {
         val startIntent = android.content.Intent(context, StepService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(startIntent)
-        } else {
-            context.startService(startIntent)
-        }
+        context.startForegroundService(startIntent)
 
         isSessionRunning = true
         sessionStartTime = System.currentTimeMillis()
@@ -966,8 +962,7 @@ class StepCounterViewModel(
                 currentLon = importedRoute[newSessionStart].lon
             }
 
-            // ---> FIX: Removed the 'else { currentLat = homeLat }' trap here! <---
-            // The engine will now completely trust the coordinates you passed it from the UI.
+
 
             if (isNewWalk) liveTrail = emptyList()
         } else {

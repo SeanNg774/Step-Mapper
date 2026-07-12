@@ -103,13 +103,13 @@ class StepService : Service(), SensorEventListener {
 
         if (rawSensorSteps < lastSeenSensorValue) {
             stepOffset += lastSeenSensorValue
-            getSharedPreferences("myPrefs", Context.MODE_PRIVATE).edit {
+            getSharedPreferences("myPrefs", MODE_PRIVATE).edit {
                 putInt("stepOffset", stepOffset)
             }
         }
 
         lastSeenSensorValue = rawSensorSteps
-        getSharedPreferences("myPrefs", Context.MODE_PRIVATE).edit {
+        getSharedPreferences("myPrefs", MODE_PRIVATE).edit {
             putInt("lastSeenSensorValue", lastSeenSensorValue)
         }
 

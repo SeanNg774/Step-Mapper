@@ -32,7 +32,7 @@ fun stringToTrail(data: String): List<TrailPoint> {
             null
     }
 }
-// Inside TrailPoint.kt or StorageUtils.kt
+
 @RequiresApi(Build.VERSION_CODES.O)
 fun saveTrailToPrefs(context: Context, trail: List<TrailPoint>, steps: Int, durationMillis: Long) {
     context.getSharedPreferences("myPrefs", Context.MODE_PRIVATE).edit {

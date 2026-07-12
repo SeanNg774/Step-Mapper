@@ -41,7 +41,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import com.example.stepcounter3.PhotoTagger
 import java.time.format.DateTimeFormatter
-import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.filled.Layers
@@ -106,10 +105,10 @@ fun LocationPickerScreen(
     startLat: Double,
     startLon: Double,
     lastRoadBearing: Double,
-    mapProvider: MapProvider,             // <--- NEW: Listen to ViewModel
-    mapType: MapType,                     // <--- NEW: Listen to ViewModel
-    onProviderToggle: () -> Unit,         // <--- NEW: Trigger ViewModel
-    onMapTypeToggle: () -> Unit,          // <--- NEW: Trigger ViewModel
+    mapProvider: MapProvider,             
+    mapType: MapType,
+    onProviderToggle: () -> Unit,
+    onMapTypeToggle: () -> Unit,
     onBearingChanged: (Double) -> Unit,
     onLocationSelected: (Double, Double) -> Unit,
     onCancel: () -> Unit
@@ -201,7 +200,7 @@ fun LocationPickerScreen(
                     mapView.overlays.removeAll { it is org.osmdroid.views.overlay.Marker }
 
                     val pickerMarker = org.osmdroid.views.overlay.Marker(mapView)
-                    pickerMarker.position = org.osmdroid.util.GeoPoint(selectedPos.latitude, selectedPos.longitude)
+                    pickerMarker.position = GeoPoint(selectedPos.latitude, selectedPos.longitude)
                     pickerMarker.title = "Selected Location"
                     pickerMarker.setAnchor(org.osmdroid.views.overlay.Marker.ANCHOR_CENTER, org.osmdroid.views.overlay.Marker.ANCHOR_BOTTOM)
                     mapView.overlays.add(pickerMarker)
@@ -279,13 +278,13 @@ fun OsmMapView(
     importedRoute: List<TrailPoint>,
     previewMarkerPoint: TrailPoint?,
     trailColor: Int,
-    currentLat: Double, // <--- NEW
-    currentLon: Double, // <--- NEW
+    currentLat: Double,
+    currentLon: Double,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
 
-    // ---> FIX 1: CRASH-PROOF INITIALIZATION <---
+
     // Forces OSM to use internal cache instead of asking for restricted SD Card permissions
     remember {
         val osmConfig = Configuration.getInstance()
@@ -319,7 +318,7 @@ fun OsmMapView(
         update = { mapView ->
             mapView.overlays.clear()
 
-            // 1. Draw Imported GPX Route (Gray)
+            //  Draw Imported GPX Route (Gray)
             if (importedRoute.isNotEmpty()) {
                 val routeOverlay = OsmPolyline(mapView)
                 routeOverlay.setPoints(importedRoute.map { GeoPoint(it.lat, it.lon) })
@@ -328,7 +327,7 @@ fun OsmMapView(
                 mapView.overlays.add(routeOverlay)
             }
 
-            // 2. Draw Active Walk Trail (Blue)
+            //  Draw Active Walk Trail (Blue)
             if (trail.isNotEmpty()) {
                 val trailOverlay = OsmPolyline(mapView)
                 trailOverlay.setPoints(trail.map { GeoPoint(it.lat, it.lon) })
@@ -349,13 +348,13 @@ fun OsmMapView(
                 endMarker.title = "End"
                 endMarker.setAnchor(0.2f, 1.0f)
 
-                // ---> FIX 2: ADDED THE END FLAG ICON <---
+
                 endMarker.icon = ContextCompat.getDrawable(context, com.example.stepcounter3.R.drawable.outline_flag_24)
                 mapView.overlays.add(endMarker)
 
             }
 
-            // 3. Draw Photo Preview Marker (Magenta)
+            //  Draw Photo Preview Marker (Magenta)
             if (previewMarkerPoint != null) {
                 val previewMarker = OsmMarker(mapView)
                 previewMarker.position = GeoPoint(previewMarkerPoint.lat, previewMarkerPoint.lon)
@@ -370,7 +369,6 @@ fun OsmMapView(
                 mapView.overlays.add(previewMarker)
                 mapView.controller.setCenter(GeoPoint(previewMarkerPoint.lat, previewMarkerPoint.lon))
             } else if (trail.isNotEmpty()) {
-                // ---> NEW: If the slider is NOT active, just look at the end of the trail <---
                 mapView.controller.setCenter(GeoPoint(trail.last().lat, trail.last().lon))
             }else {
                 mapView.controller.setCenter(GeoPoint(currentLat, currentLon))
@@ -403,7 +401,7 @@ fun MapScreen(
     val context = LocalContext.current
     LaunchedEffect(previewMarkerPoint) {
         previewMarkerPoint?.let { point ->
-            // We use .move() instead of .animate() so it tracks the slider 1:1 without lagging
+
             cameraPositionState.move(
                 CameraUpdateFactory.newLatLng(
                     LatLng(point.lat, point.lon)
@@ -425,14 +423,13 @@ fun MapScreen(
         if (trail.isNotEmpty()) {
             val latestPoint = trail.last()
 
-            // 1. Get the current zoom level
+            // Get the current zoom level
             // If the map just started (zoom is near 0), default to 17f.
             // Otherwise, respect the user's current zoom.
             val currentZoom = cameraPositionState.position.zoom
             val targetZoom = if (currentZoom < 10f) 17f else currentZoom
 
-            // 2. Move the camera instantly to the new location with the calculated zoom
-            // This is "crash-proof" because it uses the State object directly
+            // Move the camera instantly to the new location with the calculated zoom
             cameraPositionState.position = CameraPosition.fromLatLngZoom(
                 LatLng(latestPoint.lat, latestPoint.lon),
                 targetZoom
@@ -469,10 +466,10 @@ fun MapScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
 
-        // --- THE MAGIC SWITCHER ---
+
         if (mapProvider == MapProvider.GOOGLE) {
 
-            // Just ONE GoogleMap block!
+            // Just ONE GoogleMap block
             GoogleMap(
                 modifier = Modifier.fillMaxSize(),
                 cameraPositionState = cameraPositionState,
@@ -597,7 +594,7 @@ fun DirectionPickerScreen(
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
 
-        // 1. We re-use your awesome MapScreen to fill the background!
+        //  We re-use your awesome MapScreen to fill the background!
         // We pass a single point trail so it draws a pin right at the intersection.
         MapScreen(
             trail = listOf(TrailPoint(viewModel.currentLat, viewModel.currentLon, java.time.LocalDateTime.now())),
@@ -620,7 +617,7 @@ fun DirectionPickerScreen(
             currentLon = viewModel.currentLon
         )
 
-        // 2. The Direction Options Menu floats safely at the bottom
+        //  The Direction Options Menu floats safely at the bottom
         Surface(
             modifier = Modifier.align(Alignment.BottomCenter),
             shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
@@ -744,10 +741,8 @@ fun StepCounterScreen(
 
     // Sync checkpoint when sessionStartSteps loads from memory
     LaunchedEffect(viewModel.sessionStartSteps, viewModel.isSessionRunning) {
-        // If we are resuming a running session that has no trail yet (just the start point),
-        // we must align the checkpoint with the Session Start, otherwise we get a huge "lifetime" trail.
         if (viewModel.isSessionRunning && initialTrail.size <= 1 && viewModel.sessionStartSteps > 0) {
-            // Only update if the checkpoint is currently "behind" (e.g., 0)
+            // Only update if the checkpoint is currently behind
             if (viewModel.lastStepCheckpoint < viewModel.sessionStartSteps) {
                 viewModel.lastStepCheckpoint = viewModel.sessionStartSteps
             }
@@ -785,21 +780,20 @@ fun StepCounterScreen(
                 // Close picker
                 viewModel.isPickingLocation = false
 
-                // Optional: Clear any old trail if you want a fresh start
-                // viewModel.liveTrail = emptyList()
+
             },
             onCancel = { viewModel.isPickingLocation = false },
             onProviderToggle = {
                 val newProvider = if (viewModel.currentMapProvider == MapProvider.GOOGLE) MapProvider.OSM else MapProvider.GOOGLE
                 viewModel.currentMapProvider = newProvider
-                // ---> NEW: Save to hard drive <---
+
                 viewModel.routePrefs.edit { putString("mapProvider", newProvider.name) }
             },
             onMapTypeToggle = {
                 viewModel.currentMapType = if (viewModel.currentMapType == MapType.NORMAL) MapType.HYBRID else MapType.NORMAL
             },
-            mapProvider = viewModel.currentMapProvider, // <--- SYNC WITH MAIN SCREEN
-            mapType = viewModel.currentMapType,         // <--- SYNC WITH MAIN SCREEN
+            mapProvider = viewModel.currentMapProvider,
+            mapType = viewModel.currentMapType,
         )
         return // Stop rendering the rest of the UI behind the map
     }
@@ -807,20 +801,20 @@ fun StepCounterScreen(
         DirectionPickerScreen(
             viewModel = viewModel,
             onDirectionSelected = { targetNodeId ->
-                // 1. Set the chosen targets
+                // Set the chosen targets
                 viewModel.followRoadCurrentNode = viewModel.pendingFollowRoadStartNode
                 viewModel.followRoadTargetNode = targetNodeId
                 viewModel.followRoadLastNode = -1L
                 viewModel.isFollowRoadMode = true
 
-                // 2. Snap coordinates exactly to the intersection
+                //  Snap coordinates exactly to the intersection
                 val startNode = viewModel.activeRoadGraph?.nodes?.get(viewModel.pendingFollowRoadStartNode)
                 if (startNode != null) {
                     viewModel.currentLat = startNode.lat
                     viewModel.currentLon = startNode.lon
                 }
 
-                // 3. Save to memory
+                //  Save to memory
                 routePrefs.edit {
                     putBoolean("isFollowRoadMode", true)
                     putLong("followRoadCurrentNode", viewModel.followRoadCurrentNode)
@@ -840,7 +834,7 @@ fun StepCounterScreen(
                 viewModel.pendingSessionAction = null
             }
         )
-        return // CRITICAL: Stop rendering the dashboard while picking a direction!
+        return //  Stop rendering the dashboard while picking a direction
     }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -921,7 +915,7 @@ fun StepCounterScreen(
                             viewModel.liveTrail = emptyList()
 
 
-                            // NEW: Reset memory for the new route!
+                            // Reset memory for the new route!
                             routePrefs.edit {
                                 putInt("savedRouteIndex", 0)
                                 putInt("savedRouteDirection", 1)
@@ -938,7 +932,7 @@ fun StepCounterScreen(
                                 Toast.LENGTH_SHORT
                             ).show()
 
-                            // Optional: Instantly snap the map camera to the start of the imported route
+                            // snap the map camera to the start of the imported route
                             viewModel.currentLat = parsedPoints.first().lat
                             viewModel.currentLon = parsedPoints.first().lon
                         } else {
@@ -958,14 +952,14 @@ fun StepCounterScreen(
     )
 
 
-    // If the phone's RAM clears the graph while walking, silently re-download it
+    // If the phone's RAM clears the graph while walking,  re-download it
     LaunchedEffect(viewModel.isSessionRunning, viewModel.isFollowRoadMode) {
         android.util.Log.d("MapPolling", "Heartbeat Started!")
 
         while (viewModel.isSessionRunning && viewModel.isFollowRoadMode) {
 
-            // ---> THE FIX: Removed the '!isDownloadingGraph' lock <---
-            // If the map is null, we MUST download. We don't care who turned the loading spinner on!
+
+            // always download if map is null
             if (viewModel.activeRoadGraph == null) {
 
                 android.util.Log.d("MapPolling", "Graph is null. Initiating Download...")
@@ -977,9 +971,9 @@ fun StepCounterScreen(
                     val targetLon =
                         if (viewModel.mapChunkCenterLon != 0.0) viewModel.mapChunkCenterLon else viewModel.currentLon
 
-                    // Force the network call onto the Background (IO) Thread!
+                    // Force the network call onto the Background (IO) Thread
                     val downloadedGraph =
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        withContext(Dispatchers.IO) {
                             var tempGraph = fetchRoadGraph(targetLat, targetLon, 500)
 
                             if (tempGraph.adjacencyList.isEmpty()) {
@@ -1004,18 +998,17 @@ fun StepCounterScreen(
                             "MapPolling",
                             "Failed: Overpass returned 0 roads. Waiting 10s..."
                         )
-                        kotlinx.coroutines.delay(10_000)
+                        delay(10_000)
                     }
                 } catch (e: Exception) {
                     android.util.Log.e("MapPolling", "Network Crash! Error: ${e.message}")
-                    kotlinx.coroutines.delay(10_000)
+                    delay(10_000)
                 } finally {
-                    // ---> CRITICAL: We finally release the UI lock so the End button works again! <---
                     viewModel.isDownloadingGraph = false
                 }
             }
 
-            kotlinx.coroutines.delay(1000)
+            delay(1000)
         }
     }
 
@@ -1074,7 +1067,7 @@ fun StepCounterScreen(
         else -> viewModel.generatedTrail
     }
 
-    // ---> NEW: Drawer State <---
+    // Drawer State
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val dateFormatter = remember {
@@ -1171,7 +1164,7 @@ fun StepCounterScreen(
                 ) {
                     MapScreen(
                         trail = mapTrail,
-                        mapType = viewModel.currentMapType, // <--- Pass State
+                        mapType = viewModel.currentMapType,
                         onMapTypeToggle = {
                             // Toggle Logic: Normal -> Satellite -> Hybrid -> Normal
                             viewModel.currentMapType = when (viewModel.currentMapType) {
@@ -1192,13 +1185,13 @@ fun StepCounterScreen(
                         onColorPickerClick = {
                             viewModel.showColorDialog = true
                         },
-                        currentLat = viewModel.currentLat, // <--- NEW
-                        currentLon = viewModel.currentLon  // <--- NEW
+                        currentLat = viewModel.currentLat,
+                        currentLon = viewModel.currentLon
                     )
                     if (!viewModel.isSessionRunning) {
                         IconButton(
                             onClick = {
-                                // This physically opens the drawer when clicked!
+
                                 scope.launch { drawerState.open() }
                             },
                             modifier = Modifier
@@ -1223,7 +1216,7 @@ fun StepCounterScreen(
                 if (!viewModel.showUnmatchedDialog) {
 
                     // =========================================================
-                    // 1. DYNAMIC TOP SECTION: Stats (Live or Last Session)
+                    //  DYNAMIC TOP SECTION: Stats (Live or Last Session)
                     // =========================================================
                     if (viewModel.isSessionRunning) {
                         // --- LIVE STATS (Active State) ---
@@ -1259,7 +1252,7 @@ fun StepCounterScreen(
                     }
 
                     // =========================================================
-                    // 2. PRIMARY CONTROLS: Start & End Buttons (Always visible)
+                    // PRIMARY CONTROLS: Start & End Buttons (Always visible)
                     // =========================================================
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         Button(
@@ -1315,7 +1308,7 @@ fun StepCounterScreen(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     // =========================================================
-                    // 3. SECONDARY CONTROLS (Split by State)
+                    //  SECONDARY CONTROLS (Split by State)
                     // =========================================================
                     if (viewModel.isSessionRunning) {
                         // --- ACTIVE WORKOUT CONTROLS ---
@@ -1328,15 +1321,6 @@ fun StepCounterScreen(
                                 Toast.makeText(context, "No map application installed", Toast.LENGTH_SHORT).show()
                             }
                         }) { Text("Look up current location") }
-
-                        if (viewModel.importedRoute.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            OutlinedButton(onClick = {
-                                viewModel.pendingSessionAction = null
-                                viewModel.showRouteModeDialog = true
-                            }) { Text("Change Route Behavior") }
-                        }
-
 
                     } else {
                         // --- IDLE MENU CONTROLS ---
@@ -1488,8 +1472,7 @@ fun StepCounterScreen(
                     }
                 }
 
-                // --- FR6.2 PROMPT DIALOG ---
-                // --- FR6.2 PROMPT DIALOG ---
+
                 if (viewModel.showUnmatchedDialog && viewModel.unmatchedUris.isNotEmpty()) {
                     val trailToUse =
                         if (viewModel.lastSessionTrail.isNotEmpty()) viewModel.lastSessionTrail else viewModel.liveTrail
@@ -1876,7 +1859,7 @@ fun StepCounterScreen(
                             endPoint.lat,
                             endPoint.lon
                         )
-                        gap <= 30.0 // True if the gap is 50 meters or less
+                        gap <= 30.0 // True if the gap is 30 meters or less
                     } else {
                         false
                     }
@@ -1961,7 +1944,7 @@ fun StepCounterScreen(
                                     viewModel.currentMapProvider = MapProvider.OSM
 
                                     coroutineScope.launch {
-                                        // Grab the finish line of the GPX route!
+                                        // Grab the finish line of the GPX route
                                         val endPoint = viewModel.importedRoute.last()
 
                                         // Pre-download the map around the finish line
@@ -1997,13 +1980,10 @@ fun StepCounterScreen(
                                         if (startIntersection != null) {
                                             viewModel.currentChunkRadius = successfulRadius
 
-                                            // ---> FIX 1: Save the Map Center so it doesn't instantly delete it! <---
+
                                             viewModel.mapChunkCenterLat = endPoint.lat
                                             viewModel.mapChunkCenterLon = endPoint.lon
 
-                                            // ---> FIX 2: Let the Compass pick the road! <---
-                                            // By setting target to -1, the Healing Protocol will automatically
-                                            // take over and find the road matching our GPX momentum!
                                             viewModel.followRoadCurrentNode = startIntersection.id
                                             viewModel.followRoadTargetNode = -1L
                                             viewModel.followRoadLastNode = -1L
@@ -2076,7 +2056,7 @@ fun StepCounterScreen(
                 )
             }
 
-            // --- TRAIL COLOR PICKER DIALOG ---
+
             if (viewModel.showColorDialog) {
                 // Define our available colors
                 val colorOptions = listOf(
